@@ -1,16 +1,60 @@
 package mr
 
-import "log"
-import "net"
-import "os"
-import "net/rpc"
-import "net/http"
+import (
+	"log"
+	"net"
+	"net/http"
+	"net/rpc"
+	"os"
+	"sync"
+	"time"
 
+	"github.com/google/uuid"
+)
+
+const (
+	TaskPending   = 0
+	TaskRunning   = 1
+	TaskCompleted = 2
+	TimeoutLimit  = 10 * time.Second
+)
 
 type Master struct {
 	// Your definitions here.
-
+	nReduce         int
+	safeMapTaskInfo SafeMapTaskInfo
 }
+
+// MapTaskStatus MapTaskStatus
+type MapTaskStatus struct {
+	// TODO: use enum
+	// 0 unallocated, 1 allocated and incompleted, 2 completed
+	Status       uint8
+	StartTime    time.Time
+	CompleteTime time.Time
+	MapTaskID    string
+}
+
+func (st *MapTaskStatus) isCompleted() bool {
+	return st.Status == TaskCompleted
+}
+
+func (st *MapTaskStatus) isPending() bool {
+	return st.Status == TaskPending
+}
+
+func (st *MapTaskStatus) isTimeout() bool {
+	return st.StartTime.Add(TimeoutLimit).Before(time.Now())
+}
+
+// SafeMapTaskInfo SafeMapTaskInfo
+type SafeMapTaskInfo struct {
+	tasks map[string]*MapTaskStatus
+	mux   sync.Mutex
+}
+
+// TaskAllocations map[filename]mapID
+// type TaskAllocations map[string][]string
 
 // Your code here -- RPC handlers for the worker to call.
 
@@ -24,6 +68,49 @@ func (m *Master) Example(args *ExampleArgs, reply *ExampleReply) error {
 	return nil
 }
 
+// GetMapTask GetMapTask
+func (m *Master) GetMapTask(req *GetMapTaskRequest, resp *GetMapTaskResponse) error {
+	// TODO: get uuid here
+	resp.NReduce = m.nReduce
+	resp.MapTaskID = uuid.New().String()
+	resp.AllCompleted = true
+	filePaths := make([]string, 1)
+	// Traverse task and get the incompleted task, need to lock
+	// tips: if startTime + 10 < nowTime, this task should be redo
+	m.safeMapTaskInfo.mux.Lock()
+	defer m.safeMapTaskInfo.mux.Unlock()
+	// TODO: if all map tasks are allocated, should notify worker to do reduce
+	for filepath, status := range m.safeMapTaskInfo.tasks {
+		if status.isPending() || status.isTimeout() {
+			// can be allocated
+			filePaths = append(filePaths, filepath)
+			// mark filepath is allocated
+			m.safeMapTaskInfo.tasks[filepath].StartTime = time.Now()
+			m.safeMapTaskInfo.tasks[filepath].Status = TaskRunning
+			m.safeMapTaskInfo.tasks[filepath].MapTaskID = resp.MapTaskID
+			// m.taskAllocations[filepath] = append(m.taskAllocations[filepath], resp.MapID)
+			// one task one filepath
+			break
+		}
+		if !status.isCompleted() {
+			resp.AllCompleted = false
+		}
+	}
+	resp.Filepaths = filePaths
+	return nil
+}
+
+// CompleteMapTask CompleteMapTask
+func (m *Master) CompleteMapTask(req *CompleteMapTaskRequest, resp *CompleteMapTaskResponse) error {
+	m.safeMapTaskInfo.mux.Lock()
+	defer m.safeMapTaskInfo.mux.Unlock()
+	for _, filepath := range req.Filepaths {
+		// add lock
+		m.safeMapTaskInfo.tasks[filepath].Status = TaskCompleted
+		m.safeMapTaskInfo.tasks[filepath].CompleteTime = time.Now()
+	}
+	return nil
+}
 
 //
 // start a thread that listens for RPCs from worker.go
@@ -50,7 +137,6 @@ func (m *Master) Done() bool {
 
 	// Your code here.
 
-
 	return ret
 }
 
@@ -63,7 +149,6 @@ func MakeMaster(files []string, nReduce int) *Master {
 	m := Master{}
 
 	// Your code here.
-
 
 	m.server()
 	return &m

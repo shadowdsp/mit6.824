@@ -6,8 +6,10 @@ package mr
 // remember to capitalize all names.
 //
 
-import "os"
-import "strconv"
+import (
+	"os"
+	"strconv"
+)
 
 //
 // example to show how to declare the arguments
@@ -24,6 +26,24 @@ type ExampleReply struct {
 
 // Add your RPC definitions here.
 
+// GetMapTaskRequest GetMapTaskRequest
+type GetMapTaskRequest struct{}
+
+// GetMapTaskResponse GetMapTaskResponse
+type GetMapTaskResponse struct {
+	Filepaths    []string
+	MapTaskID    string
+	NReduce      int
+	AllCompleted bool
+}
+
+type CompleteMapTaskRequest struct {
+	Filepaths             []string
+	MapID                 string
+	IntermediateFilepaths []string
+}
+
+type CompleteMapTaskResponse struct{}
 
 // Cook up a unique-ish UNIX-domain socket name
 // in /var/tmp, for the master.

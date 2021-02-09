@@ -1,7 +1,7 @@
 package mr
 
 import (
-	"log"
+	"fmt"
 	"net"
 	"net/http"
 	"net/rpc"
@@ -10,6 +10,7 @@ import (
 	"time"
 
 	"github.com/google/uuid"
+	log "github.com/sirupsen/logrus"
 )
 
 const (
@@ -106,6 +107,17 @@ func (m *Master) CompleteMapTask(req *CompleteMapTaskRequest, resp *CompleteMapT
 	defer m.safeMapTaskInfo.mux.Unlock()
 	for _, filepath := range req.Filepaths {
 		// add lock
+		if m.safeMapTaskInfo.tasks[filepath] == nil {
+			err := fmt.Errorf("file path %+v is not exist in task info", filepath)
+			log.Errorf(err.Error())
+			return err
+		}
+		if m.safeMapTaskInfo.tasks[filepath].MapTaskID != req.MapID {
+			err := fmt.Errorf("Master map id %v is not match request map id %v")
+			log.Warnf(err.Error())
+			return err
+		}
+		log.Infof("Map id %v succeeded", req.MapID)
 		m.safeMapTaskInfo.tasks[filepath].Status = TaskCompleted
 		m.safeMapTaskInfo.tasks[filepath].CompleteTime = time.Now()
 	}

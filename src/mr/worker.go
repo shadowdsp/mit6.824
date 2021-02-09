@@ -6,11 +6,13 @@ import (
 	"fmt"
 	"hash/fnv"
 	"io/ioutil"
-	"log"
+
 	"net/rpc"
 	"os"
 	"sort"
 	"time"
+
+	log "github.com/sirupsen/logrus"
 )
 
 //
@@ -66,17 +68,17 @@ func resolveMapTask(
 	filenames []string,
 	nReduce int,
 	mapf func(string, string) []KeyValue,
-) (bool, error) {
+) ([]string, error) {
 	// execute map task
 	intermediate := []KeyValue{}
 	for _, filename := range filenames {
 		file, err := os.Open(filename)
 		if err != nil {
-			log.Fatalf("cannot open %v", filename)
+			log.Errorf("cannot open %v", filename)
 		}
 		content, err := ioutil.ReadAll(file)
 		if err != nil {
-			log.Fatalf("cannot read %v", filename)
+			log.Errorf("cannot read %v", filename)
 		}
 		file.Close()
 		kva := mapf(filename, string(content))
@@ -102,22 +104,12 @@ func resolveMapTask(
 		ofile, _ := os.Create(intermediateFilename)
 		err := saveKV(tmpKvs, ofile)
 		if err != nil {
-			return false, err
+			return nil, err
 		}
 		intermediateFilenames = append(intermediateFilenames, intermediateFilename)
 		i = j
 	}
-
-	completeMapTaskRequest := CompleteMapTaskRequest{
-		Filepaths:             filenames,
-		MapID:                 mapID,
-		IntermediateFilepaths: intermediateFilenames,
-	}
-	ok := call("Master.CompleteMapTask", &completeMapTaskRequest, &CompleteMapTaskResponse{})
-	if !ok {
-		return false, errors.New("RPC CompleteMapTask failed")
-	}
-	return true, nil
+	return intermediateFilenames, nil
 }
 
 //
@@ -130,13 +122,10 @@ func Worker(mapf func(string, string) []KeyValue,
 
 	// Map part
 	taskQueryDuration := time.Duration(time.Millisecond * 500)
-	taskQueryTicker := time.NewTicker(taskQueryDuration)
-	defer taskQueryTicker.Stop()
-	for {
-		<-taskQueryTicker.C
+	for range time.Tick(taskQueryDuration) {
 		resp, err := rpcGetMapTask()
 		if err != nil {
-			fmt.Errorf("Failed to execute rpcGetMapTask(): %v", err)
+			log.Errorf("Failed to execute rpcGetMapTask(): %v", err)
 			return
 		}
 		if resp.AllCompleted {
@@ -144,15 +133,24 @@ func Worker(mapf func(string, string) []KeyValue,
 			break
 		}
 		// concurrently resolve map task
-		go func() {
-			ok, err := resolveMapTask(resp.MapTaskID, resp.Filepaths, resp.NReduce, mapf)
+		go func(resp *GetMapTaskResponse) {
+			intermediateFilenames, err := resolveMapTask(resp.MapTaskID, resp.Filepaths, resp.NReduce, mapf)
 			if err != nil {
-				fmt.Errorf("Failed to execute resolveMapTask(): %v", err)
+				log.Errorf("Failed to execute resolveMapTask(): %v", err)
+				return
 			}
-			if !ok {
 
+			completeMapTaskRequest := CompleteMapTaskRequest{
+				Filepaths:             resp.Filepaths,
+				MapID:                 resp.MapTaskID,
+				IntermediateFilepaths: intermediateFilenames,
 			}
-		}()
+			ok := call("Master.CompleteMapTask", &completeMapTaskRequest, &CompleteMapTaskResponse{})
+			if !ok {
+				log.Errorf("RPC CompleteMapTask failed")
+				return
+			}
+		}(resp)
 	}
 
 	// uncomment to send the Example RPC to the master.
@@ -168,6 +166,16 @@ func rpcGetMapTask() (*GetMapTaskResponse, error) {
 		return nil, errors.New("RPCGetMapTask failed")
 	}
 	fmt.Printf("RPCGetMapTask result: %+v\n", response)
+	return &response, nil
+}
+
+func rpcCompleteMapTask() (*CompleteMapTaskResponse, error) {
+	response := CompleteMapTaskResponse{}
+	ok := call("Master.CompleteMapTask", &CompleteMapTaskRequest{}, &response)
+	if !ok {
+		return nil, errors.New("RPCCompleteMapTask failed")
+	}
+	fmt.Printf("RPCCompleteMapTask result: %+v\n", response)
 	return &response, nil
 }
 

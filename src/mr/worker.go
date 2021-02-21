@@ -134,6 +134,9 @@ func Worker(mapf func(string, string) []KeyValue,
 		}
 		// concurrently resolve map task
 		go func(resp *GetMapTaskResponse) {
+			if resp.Filepaths == nil {
+				return
+			}
 			intermediateFilenames, err := resolveMapTask(resp.MapTaskID, resp.Filepaths, resp.NReduce, mapf)
 			if err != nil {
 				log.Errorf("Failed to execute resolveMapTask(): %v", err)
@@ -153,6 +156,23 @@ func Worker(mapf func(string, string) []KeyValue,
 		}(resp)
 	}
 
+	for range time.Tick(taskQueryDuration) {
+		resp, err := rpcGetReduceTask()
+		if err != nil {
+			log.Errorf("Failed to execute rpcGetReduceTask(): %v", err)
+			return		
+		}
+		if resp.AllCompleted {
+			break
+		}
+		go func(resp *GetReduceTaskResponse) {
+			if resp.Filepaths == nil {
+				return
+			}
+			
+		}
+	}
+
 	// uncomment to send the Example RPC to the master.
 	// CallExample()
 
@@ -169,15 +189,15 @@ func rpcGetMapTask() (*GetMapTaskResponse, error) {
 	return &response, nil
 }
 
-func rpcCompleteMapTask() (*CompleteMapTaskResponse, error) {
-	response := CompleteMapTaskResponse{}
-	ok := call("Master.CompleteMapTask", &CompleteMapTaskRequest{}, &response)
-	if !ok {
-		return nil, errors.New("RPCCompleteMapTask failed")
-	}
-	fmt.Printf("RPCCompleteMapTask result: %+v\n", response)
-	return &response, nil
-}
+// func rpcCompleteMapTask() (*CompleteMapTaskResponse, error) {
+// 	response := CompleteMapTaskResponse{}
+// 	ok := call("Master.CompleteMapTask", &CompleteMapTaskRequest{}, &response)
+// 	if !ok {
+// 		return nil, errors.New("RPCCompleteMapTask failed")
+// 	}
+// 	fmt.Printf("RPCCompleteMapTask result: %+v\n", response)
+// 	return &response, nil
+// }
 
 //
 // send an RPC request to the master, wait for the response.

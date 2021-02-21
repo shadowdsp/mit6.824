@@ -39,11 +39,27 @@ type GetMapTaskResponse struct {
 
 type CompleteMapTaskRequest struct {
 	Filepaths             []string
-	MapID                 string
+	MapTaskID                 string
 	IntermediateFilepaths []string
 }
 
 type CompleteMapTaskResponse struct{}
+
+type GetReduceTaskRequest struct{}
+
+type GetReduceTaskResponse struct {
+	Filepaths []string
+	ReduceTaskID string
+	AllCompleted bool
+}
+
+type CompleteReduceTaskRequest struct {
+	Filepaths []string
+	ReduceTaskID string
+	ReduceOutputPath string
+}
+
+type CompleteReduceTaskResponse struct{}
 
 // Cook up a unique-ish UNIX-domain socket name
 // in /var/tmp, for the master.

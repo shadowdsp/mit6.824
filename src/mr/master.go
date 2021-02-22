@@ -6,10 +6,10 @@ import (
 	"net/http"
 	"net/rpc"
 	"os"
-	"sync"
-	"time"
 	"strconv"
 	"strings"
+	"sync"
+	"time"
 
 	"github.com/google/uuid"
 	log "github.com/sirupsen/logrus"
@@ -24,8 +24,8 @@ const (
 
 type Master struct {
 	// Your definitions here.
-	nReduce         int
-	safeMapTaskInfo *SafeMapTaskInfo
+	nReduce            int
+	safeMapTaskInfo    *SafeMapTaskInfo
 	safeReduceTaskInfo *SafeReduceTaskInfo
 }
 
@@ -33,10 +33,10 @@ type Master struct {
 type MapTaskStatus struct {
 	// TODO: use enum
 	// 0 unallocated, 1 allocated and incompleted, 2 completed
-	Status       uint8
-	StartTime    time.Time
-	CompleteTime time.Time
-	MapTaskID    string
+	Status                uint8
+	StartTime             time.Time
+	CompleteTime          time.Time
+	MapTaskID             string
 	IntermediateFilepaths []string
 }
 
@@ -54,9 +54,9 @@ func (st *MapTaskStatus) isTimeout() bool {
 
 // SafeMapTaskInfo SafeMapTaskInfo
 type SafeMapTaskInfo struct {
-	tasks map[string]*MapTaskStatus
+	tasks     map[string]*MapTaskStatus
 	filepaths []string
-	mux   sync.Mutex
+	mux       sync.Mutex
 }
 
 func newMapTaskInfo(filepaths []string) *SafeMapTaskInfo {
@@ -88,18 +88,19 @@ func (st *ReduceTaskStatus) isTimeout() bool {
 type ReduceTaskStatus struct {
 	// TODO: use enum
 	// 0 unallocated, 1 allocated and incompleted, 2 completed
-	Status       uint8
-	StartTime    time.Time
-	CompleteTime time.Time
-	ReduceTaskID    string
+	Status           uint8
+	StartTime        time.Time
+	CompleteTime     time.Time
+	ReduceTaskID     string
 	ReduceInputPaths []string
-	RedcueOutputPath string
+	ReduceOutputPath string
 }
 
+// SafeReduceTaskInfo SafeReduceTaskInfo
 type SafeReduceTaskInfo struct {
-	tasks map[string]*ReduceTaskStatus
+	tasks               map[string]*ReduceTaskStatus
 	initiliazeCompleted bool
-	mux   sync.Mutex
+	mux                 sync.Mutex
 }
 
 func newReduceTaskStatus() *ReduceTaskStatus {
@@ -116,10 +117,8 @@ func (m *Master) initializeReduceTask() error {
 		status.ReduceTaskID = strconv.Itoa(i)
 	}
 
-	filepathMap := make(map[string]struct{})
 	for _, status := range m.safeMapTaskInfo.tasks {
-		for _, filepath := status.IntermediateFilepaths {
-			// filepathMap[filepath] = struct{}
+		for _, filepath := range status.IntermediateFilepaths {
 			tmp := strings.Split(filepath, "-")
 			reduceID := tmp[len(tmp)-1]
 			if status, ok := m.safeReduceTaskInfo.tasks[reduceID]; ok {
@@ -154,6 +153,7 @@ func (m *Master) Example(args *ExampleArgs, reply *ExampleReply) error {
 func (m *Master) GetMapTask(req *GetMapTaskRequest, resp *GetMapTaskResponse) error {
 	// TODO: get uuid here
 	resp.NReduce = m.nReduce
+	// TODO: change to filename hash
 	resp.MapTaskID = uuid.New().String()
 	resp.AllCompleted = true
 	filePaths := []string{}
@@ -189,7 +189,7 @@ func (m *Master) GetMapTask(req *GetMapTaskRequest, resp *GetMapTaskResponse) er
 		defer m.safeReduceTaskInfo.mux.Unlock()
 		err := m.initializeReduceTask()
 		if err != nil {
-			return err	
+			return err
 		}
 	}
 	return nil
@@ -200,9 +200,8 @@ func (m *Master) CompleteMapTask(req *CompleteMapTaskRequest, resp *CompleteMapT
 	m.safeMapTaskInfo.mux.Lock()
 	defer m.safeMapTaskInfo.mux.Unlock()
 	for _, filepath := range req.Filepaths {
-		// add lock
-		status := m.safeMapTaskInfo.tasks[filepath]
-		if status == nil {
+		status, ok := m.safeMapTaskInfo.tasks[filepath]
+		if !ok {
 			err := fmt.Errorf("file path %+v is not exist in task info", filepath)
 			log.Errorf(err.Error())
 			return err
@@ -220,17 +219,41 @@ func (m *Master) CompleteMapTask(req *CompleteMapTaskRequest, resp *CompleteMapT
 	return nil
 }
 
+// GetReduceTaskRequest GetReduceTaskRequest
 func (m *Master) GetReduceTaskRequest(req *GetReduceTaskRequest, resp *GetReduceTaskResponse) error {
-	resp.AllCompleted = true
 	m.safeReduceTaskInfo.mux.Lock()
 	defer m.safeReduceTaskInfo.mux.Unlock()
-	for reduceTaskID, status := range m.safeReduceTaskInfo.tasks {
+	if !m.safeReduceTaskInfo.initiliazeCompleted {
+		return nil
+	}
+	resp.AllCompleted = true
+	for _, status := range m.safeReduceTaskInfo.tasks {
 		if status.isPending() || status.isTimeout() {
 			resp.Filepaths = status.ReduceInputPaths
 			resp.ReduceTaskID = status.ReduceTaskID
+			break
 		}
-
+		if !status.isCompleted() {
+			resp.AllCompleted = false
+		}
 	}
+	return nil
+}
+
+// CompleteReduceTask CompleteReduceTask
+func (m *Master) CompleteReduceTask(req *CompleteReduceTaskRequest, resp *CompleteReduceTaskResponse) error {
+	m.safeReduceTaskInfo.mux.Lock()
+	defer m.safeReduceTaskInfo.mux.Unlock()
+	status, ok := m.safeReduceTaskInfo.tasks[req.ReduceTaskID]
+	if !ok {
+		err := fmt.Errorf("Execute CompleteReduceTask() failed, ReduceTaskID %v cannot be found in tasks", req.ReduceTaskID)
+		log.Errorf(err.Error())
+		return err
+	}
+	status.Status = TaskCompleted
+	status.CompleteTime = time.Now()
+	status.ReduceOutputPath = req.ReduceOutputPath
+	return nil
 }
 
 //
@@ -268,10 +291,10 @@ func (m *Master) Done() bool {
 //
 func MakeMaster(files []string, nReduce int) *Master {
 	m := Master{
-		nReduce: nReduce,
+		nReduce:         nReduce,
 		safeMapTaskInfo: newMapTaskInfo(files),
 		safeReduceTaskInfo: &SafeReduceTaskInfo{
-			m.safeReduceTaskInfo.initiliazeCompleted: false,
+			initiliazeCompleted: false,
 		},
 	}
 

@@ -39,7 +39,7 @@ type GetMapTaskResponse struct {
 
 type CompleteMapTaskRequest struct {
 	Filepaths             []string
-	MapTaskID                 string
+	MapTaskID             string
 	IntermediateFilepaths []string
 }
 
@@ -48,14 +48,13 @@ type CompleteMapTaskResponse struct{}
 type GetReduceTaskRequest struct{}
 
 type GetReduceTaskResponse struct {
-	Filepaths []string
+	Filepaths    []string
 	ReduceTaskID string
 	AllCompleted bool
 }
 
 type CompleteReduceTaskRequest struct {
-	Filepaths []string
-	ReduceTaskID string
+	ReduceTaskID     string
 	ReduceOutputPath string
 }
 

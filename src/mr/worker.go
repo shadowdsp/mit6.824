@@ -2,7 +2,6 @@ package mr
 
 import (
 	"encoding/json"
-	"errors"
 	"fmt"
 	"hash/fnv"
 	"io/ioutil"
@@ -19,8 +18,8 @@ import (
 // Map functions return a slice of KeyValue.
 //
 type KeyValue struct {
-	Key   string
-	Value string
+	Key   string `json:"key"`
+	Value string `json:"value"`
 }
 
 // ByKey for sorting by key.
@@ -51,17 +50,17 @@ func saveKV(kva []KeyValue, file *os.File) error {
 	return nil
 }
 
-// func loadKV(kva []KeyValue, file *os.File) error {
-// 	dec := json.NewDecoder(file)
-// 	for {
-// 		var kv KeyValue
-// 		if err := dec.Decode(&kv); err != nil {
-// 			return err
-// 		}
-// 		kva = append(kva, kv)
-// 	}
-// 	return nil
-// }
+func loadKV(kva []KeyValue, file *os.File) error {
+	dec := json.NewDecoder(file)
+	for dec.More() {
+		var kv KeyValue
+		if err := dec.Decode(&kv); err != nil {
+			return err
+		}
+		kva = append(kva, kv)
+	}
+	return nil
+}
 
 func resolveMapTask(
 	mapID string,
@@ -75,10 +74,12 @@ func resolveMapTask(
 		file, err := os.Open(filename)
 		if err != nil {
 			log.Errorf("cannot open %v", filename)
+			return nil, err
 		}
 		content, err := ioutil.ReadAll(file)
 		if err != nil {
 			log.Errorf("cannot read %v", filename)
+			return nil, err
 		}
 		file.Close()
 		kva := mapf(filename, string(content))
@@ -101,15 +102,61 @@ func resolveMapTask(
 		// output := reducef(intermediate[i].Key, values)
 		reduceID := ihash(intermediate[i].Key) % nReduce
 		intermediateFilename := fmt.Sprintf("mr-%v-%v", mapID, reduceID)
-		ofile, _ := os.Create(intermediateFilename)
-		err := saveKV(tmpKvs, ofile)
+		ofile, err := os.Create(intermediateFilename)
+		if err != nil {
+			return nil, err
+		}
+		err = saveKV(tmpKvs, ofile)
 		if err != nil {
 			return nil, err
 		}
 		intermediateFilenames = append(intermediateFilenames, intermediateFilename)
 		i = j
+		ofile.Close()
 	}
 	return intermediateFilenames, nil
+}
+
+func resolveReduceTask(
+	reduceTaskID string,
+	filepaths []string,
+	reducef func(string, []string) string,
+) (string, error) {
+	kvs := []KeyValue{}
+	for _, filepath := range filepaths {
+		ifile, err := os.Open(filepath)
+		if err != nil {
+			log.Errorf("cannot open filepath %v, err: %v", filepath, err)
+			return "", err
+		}
+		err = loadKV(kvs, ifile)
+		if err != nil {
+			return "", err
+		}
+	}
+	sort.Sort(ByKey(kvs))
+
+	reduceOutputFilepath := "mr-out-" + reduceTaskID
+	ofile, err := os.Create(reduceOutputFilepath)
+	if err != nil {
+		return "", err
+	}
+	defer ofile.Close()
+	i := 0
+	for i < len(kvs) {
+		j := i + 1
+		for j < len(kvs) && kvs[j].Key == kvs[i].Key {
+			j++
+		}
+		values := []string{}
+		for k := i; k < j; k++ {
+			values = append(values, kvs[k].Value)
+		}
+		output := reducef(kvs[i].Key, values)
+		fmt.Fprintf(ofile, "%v %v\n", kvs[i].Key, output)
+		i = j
+	}
+	return reduceOutputFilepath, nil
 }
 
 //
@@ -145,12 +192,12 @@ func Worker(mapf func(string, string) []KeyValue,
 
 			completeMapTaskRequest := CompleteMapTaskRequest{
 				Filepaths:             resp.Filepaths,
-				MapID:                 resp.MapTaskID,
+				MapTaskID:             resp.MapTaskID,
 				IntermediateFilepaths: intermediateFilenames,
 			}
-			ok := call("Master.CompleteMapTask", &completeMapTaskRequest, &CompleteMapTaskResponse{})
-			if !ok {
-				log.Errorf("RPC CompleteMapTask failed")
+			err = call("Master.CompleteMapTask", &completeMapTaskRequest, &CompleteMapTaskResponse{})
+			if err != nil {
+				log.Errorf("Excute RPC CompleteMapTask failed, err: %v", err)
 				return
 			}
 		}(resp)
@@ -160,7 +207,7 @@ func Worker(mapf func(string, string) []KeyValue,
 		resp, err := rpcGetReduceTask()
 		if err != nil {
 			log.Errorf("Failed to execute rpcGetReduceTask(): %v", err)
-			return		
+			return
 		}
 		if resp.AllCompleted {
 			break
@@ -169,24 +216,37 @@ func Worker(mapf func(string, string) []KeyValue,
 			if resp.Filepaths == nil {
 				return
 			}
-			
-		}
-	}
+			reduceOutputFilepath, err := resolveReduceTask(resp.ReduceTaskID, resp.Filepaths, reducef)
+			if err != nil {
+				log.Errorf("Failed to execute resolveReduceTask(): %v", err)
+				return
+			}
 
-	// uncomment to send the Example RPC to the master.
-	// CallExample()
+			completeReduceTaskRequest := CompleteReduceTaskRequest{
+				ReduceTaskID:     resp.ReduceTaskID,
+				ReduceOutputPath: reduceOutputFilepath,
+			}
+			err = call("Master.CompleteReduceTask", &completeReduceTaskRequest, &CompleteMapTaskResponse{})
+			if err != nil {
+				log.Errorf("Excute RPC CompleteReduceTask failed, err: %v", err)
+				return
+			}
+		}(resp)
+	}
 
 }
 
 // RPCGetMapTask call for map task
 func rpcGetMapTask() (*GetMapTaskResponse, error) {
 	response := GetMapTaskResponse{}
-	ok := call("Master.GetMapTask", &GetMapTaskRequest{}, &response)
-	if !ok {
-		return nil, errors.New("RPCGetMapTask failed")
-	}
-	fmt.Printf("RPCGetMapTask result: %+v\n", response)
-	return &response, nil
+	err := call("Master.GetMapTask", &GetMapTaskRequest{}, &response)
+	return &response, err
+}
+
+func rpcGetReduceTask() (*GetReduceTaskResponse, error) {
+	response := GetReduceTaskResponse{}
+	err := call("Master.GetReduce", &GetReduceTaskRequest{}, &response)
+	return &response, err
 }
 
 // func rpcCompleteMapTask() (*CompleteMapTaskResponse, error) {
@@ -204,7 +264,7 @@ func rpcGetMapTask() (*GetMapTaskResponse, error) {
 // usually returns true.
 // returns false if something goes wrong.
 //
-func call(rpcname string, args interface{}, reply interface{}) bool {
+func call(rpcname string, args interface{}, reply interface{}) error {
 	// c, err := rpc.DialHTTP("tcp", "127.0.0.1"+":1234")
 	sockname := masterSock()
 	c, err := rpc.DialHTTP("unix", sockname)
@@ -214,12 +274,7 @@ func call(rpcname string, args interface{}, reply interface{}) bool {
 	defer c.Close()
 
 	err = c.Call(rpcname, args, reply)
-	if err == nil {
-		return true
-	}
-
-	fmt.Println(err)
-	return false
+	return err
 }
 
 //

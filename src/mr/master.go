@@ -84,7 +84,7 @@ func (st *ReduceTaskStatus) isTimeout() bool {
 	return !st.isCompleted() && st.StartTime.Add(TimeoutLimit).Before(time.Now())
 }
 
-// MapTaskStatus MapTaskStatus
+// ReduceTaskStatus ReduceTaskStatus
 type ReduceTaskStatus struct {
 	// TODO: use enum
 	// 0 unallocated, 1 allocated and incompleted, 2 completed
@@ -162,6 +162,7 @@ func (m *Master) GetMapTask(req *GetMapTaskRequest, resp *GetMapTaskResponse) er
 	m.safeMapTaskInfo.mux.Lock()
 	defer m.safeMapTaskInfo.mux.Unlock()
 	// TODO: if all map tasks are allocated, should notify worker to do reduce
+	log.Debugf("Master.GetMapTask filepaths: %+v\n", m.safeMapTaskInfo.filepaths)
 	for _, filepath := range m.safeMapTaskInfo.filepaths {
 		if m.safeMapTaskInfo.tasks[filepath] == nil {
 			m.safeMapTaskInfo.tasks[filepath] = newMapTaskStatus()
@@ -174,15 +175,14 @@ func (m *Master) GetMapTask(req *GetMapTaskRequest, resp *GetMapTaskResponse) er
 			status.StartTime = time.Now()
 			status.Status = TaskRunning
 			status.MapTaskID = resp.MapTaskID
+			resp.AllCompleted = false
 			// one task one filepath
 			break
 		}
-		if !status.isCompleted() {
-			resp.AllCompleted = false
-		}
+		log.Debugf("Master.GetMapTask status: %+v\n", status)
 	}
 	resp.Filepaths = filePaths
-
+	log.Debugf("Master.GetMapTask resp: %+v", resp)
 	if resp.AllCompleted {
 		// initialize reduce tasks
 		m.safeReduceTaskInfo.mux.Lock()
@@ -219,8 +219,8 @@ func (m *Master) CompleteMapTask(req *CompleteMapTaskRequest, resp *CompleteMapT
 	return nil
 }
 
-// GetReduceTaskRequest GetReduceTaskRequest
-func (m *Master) GetReduceTaskRequest(req *GetReduceTaskRequest, resp *GetReduceTaskResponse) error {
+// GetReduceTask GetReduceTask
+func (m *Master) GetReduceTask(req *GetReduceTaskRequest, resp *GetReduceTaskResponse) error {
 	m.safeReduceTaskInfo.mux.Lock()
 	defer m.safeReduceTaskInfo.mux.Unlock()
 	if !m.safeReduceTaskInfo.initiliazeCompleted {
@@ -231,10 +231,8 @@ func (m *Master) GetReduceTaskRequest(req *GetReduceTaskRequest, resp *GetReduce
 		if status.isPending() || status.isTimeout() {
 			resp.Filepaths = status.ReduceInputPaths
 			resp.ReduceTaskID = status.ReduceTaskID
-			break
-		}
-		if !status.isCompleted() {
 			resp.AllCompleted = false
+			break
 		}
 	}
 	return nil
@@ -290,6 +288,8 @@ func (m *Master) Done() bool {
 // nReduce is the number of reduce tasks to use.
 //
 func MakeMaster(files []string, nReduce int) *Master {
+	log.Infof("Master nReduce: %+v\n", nReduce)
+	log.Infof("Master resolve files: %+v\n", files)
 	m := Master{
 		nReduce:         nReduce,
 		safeMapTaskInfo: newMapTaskInfo(files),

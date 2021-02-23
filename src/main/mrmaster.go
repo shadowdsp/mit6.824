@@ -14,7 +14,8 @@ import (
 	"os"
 	"time"
 
-	"../mr"
+	"mit6.824/src/mr"
+
 	log "github.com/sirupsen/logrus"
 )
 
@@ -25,7 +26,7 @@ func init() {
 	// Can be any io.Writer, see below for File example
 	log.SetOutput(os.Stdout)
 	// Only log the warning severity or above.
-	log.SetLevel(log.InfoLevel)
+	log.SetLevel(log.DebugLevel)
 	log.SetFormatter(&log.TextFormatter{
 		// DisableColors: true,
 		FullTimestamp: true,

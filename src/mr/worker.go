@@ -203,6 +203,10 @@ func Worker(mapf func(string, string) []KeyValue,
 		}(resp)
 	}
 
+	log.Info("================================")
+	log.Info("====== Map task succeeded ======")
+	log.Info("================================")
+
 	for range time.Tick(taskQueryDuration) {
 		resp, err := rpcGetReduceTask()
 		if err != nil {
@@ -234,6 +238,9 @@ func Worker(mapf func(string, string) []KeyValue,
 		}(resp)
 	}
 
+	log.Info("================================")
+	log.Info("===== Reduce task succeeded ====")
+	log.Info("================================")
 }
 
 // RPCGetMapTask call for map task
@@ -245,7 +252,7 @@ func rpcGetMapTask() (*GetMapTaskResponse, error) {
 
 func rpcGetReduceTask() (*GetReduceTaskResponse, error) {
 	response := GetReduceTaskResponse{}
-	err := call("Master.GetReduce", &GetReduceTaskRequest{}, &response)
+	err := call("Master.GetReduceTask", &GetReduceTaskRequest{}, &response)
 	return &response, err
 }
 

@@ -14,7 +14,7 @@ import (
 	"plugin"
 	"sort"
 
-	"../mr"
+	"mit6.824/src/mr"
 )
 
 // for sorting by key.

@@ -50,18 +50,6 @@ func saveKV(kva []KeyValue, file *os.File) error {
 	return nil
 }
 
-func loadKV(kva []KeyValue, file *os.File) error {
-	dec := json.NewDecoder(file)
-	for dec.More() {
-		var kv KeyValue
-		if err := dec.Decode(&kv); err != nil {
-			return err
-		}
-		kva = append(kva, kv)
-	}
-	return nil
-}
-
 func resolveMapTask(
 	mapID string,
 	filenames []string,
@@ -87,8 +75,9 @@ func resolveMapTask(
 	}
 	// sort the intermediate value
 	sort.Sort(ByKey(intermediate))
+	// log.Debugf("[Worker.resolveMapTask] filepath: %+v, intermediate: %+v", filenames, intermediate)
 	intermediateFilenames := []string{}
-
+	intermediateMap := make(map[string]struct{})
 	i := 0
 	for i < len(intermediate) {
 		j := i + 1
@@ -101,20 +90,46 @@ func resolveMapTask(
 		}
 		// output := reducef(intermediate[i].Key, values)
 		reduceID := ihash(intermediate[i].Key) % nReduce
-		intermediateFilename := fmt.Sprintf("mr-%v-%v", mapID, reduceID)
-		ofile, err := os.Create(intermediateFilename)
+		intermediateFilename := fmt.Sprintf("mr-tmp/mr-%v-%v", mapID, reduceID)
+
+		// append mode
+		if _, err := os.Stat(intermediateFilename); os.IsNotExist(err) {
+			_, err = os.Create(intermediateFilename)
+			if err != nil {
+				return nil, err
+			}
+		}
+		ofile, err := os.OpenFile(intermediateFilename, os.O_APPEND|os.O_CREATE|os.O_WRONLY, 0644)
 		if err != nil {
 			return nil, err
 		}
+
 		err = saveKV(tmpKvs, ofile)
 		if err != nil {
 			return nil, err
 		}
-		intermediateFilenames = append(intermediateFilenames, intermediateFilename)
-		i = j
 		ofile.Close()
+
+		if _, ok := intermediateMap[intermediateFilename]; !ok {
+			// Guarantee no duplication
+			intermediateMap[intermediateFilename] = struct{}{}
+			intermediateFilenames = append(intermediateFilenames, intermediateFilename)
+		}
+		i = j
 	}
 	return intermediateFilenames, nil
+}
+
+func loadKV(kvs *[]KeyValue, file *os.File) error {
+	dec := json.NewDecoder(file)
+	for dec.More() {
+		var kv KeyValue
+		if err := dec.Decode(&kv); err != nil {
+			return err
+		}
+		*kvs = append(*kvs, kv)
+	}
+	return nil
 }
 
 func resolveReduceTask(
@@ -129,11 +144,12 @@ func resolveReduceTask(
 			log.Errorf("cannot open filepath %v, err: %v", filepath, err)
 			return "", err
 		}
-		err = loadKV(kvs, ifile)
+		err = loadKV(&kvs, ifile)
 		if err != nil {
 			return "", err
 		}
 	}
+	// log.Debugf("[Worker.resolveReduceTask] filepath: %+v, loaded kvs: %+v", filepaths, kvs)
 	sort.Sort(ByKey(kvs))
 
 	reduceOutputFilepath := "mr-out-" + reduceTaskID

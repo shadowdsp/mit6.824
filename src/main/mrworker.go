@@ -10,11 +10,14 @@ package main
 // Please do not change this file.
 //
 
-import "mit6.824/src/mr"
-import "plugin"
-import "os"
-import "fmt"
-import "log"
+import (
+	"fmt"
+	"os"
+	"plugin"
+
+	log "github.com/sirupsen/logrus"
+	"mit6.824/src/mr"
+)
 
 func main() {
 	if len(os.Args) != 2 {
@@ -48,4 +51,14 @@ func loadPlugin(filename string) (func(string, string) []mr.KeyValue, func(strin
 	reducef := xreducef.(func(string, []string) string)
 
 	return mapf, reducef
+}
+
+func init() {
+	log.SetOutput(os.Stdout)
+	// Only log the warning severity or above.
+	log.SetLevel(log.DebugLevel)
+	log.SetFormatter(&log.TextFormatter{
+		// DisableColors: true,
+		FullTimestamp: true,
+	})
 }

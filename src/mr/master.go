@@ -117,12 +117,14 @@ func (m *Master) initializeReduceTask() error {
 		status.ReduceTaskID = strconv.Itoa(i)
 	}
 
-	for _, status := range m.safeMapTaskInfo.tasks {
+	for f, status := range m.safeMapTaskInfo.tasks {
+		log.Debugf("[Master.initializeReduceTask] Map file %v, status %v, len(ifile) %v, ifile %+v", f, status.Status, len(status.IntermediateFilepaths), status.IntermediateFilepaths)
 		for _, filepath := range status.IntermediateFilepaths {
 			tmp := strings.Split(filepath, "-")
 			reduceID := tmp[len(tmp)-1]
-			if status, ok := m.safeReduceTaskInfo.tasks[reduceID]; ok {
-				status.ReduceInputPaths = append(status.ReduceInputPaths, filepath)
+			if rStatus, ok := m.safeReduceTaskInfo.tasks[reduceID]; ok {
+				rStatus.ReduceInputPaths = append(rStatus.ReduceInputPaths, filepath)
+				// log.Debugf("[Master.initializeReduceTask] reduceTaskID %v has input paths: %+v", rStatus.ReduceTaskID, rStatus.ReduceInputPaths)
 			} else {
 				err := fmt.Errorf("IntermediateFilepath %v is not match reduce number %v", filepath, m.nReduce)
 				log.Errorf(err.Error())
@@ -154,7 +156,7 @@ func (m *Master) GetMapTask(req *GetMapTaskRequest, resp *GetMapTaskResponse) er
 	// TODO: get uuid here
 	resp.NReduce = m.nReduce
 	// TODO: change to filename hash
-	resp.MapTaskID = uuid.New().String()
+	resp.MapTaskID = uuid.New().String()[:8]
 	resp.AllCompleted = true
 	filePaths := []string{}
 	// Traverse task and get the incompleted task, need to lock
@@ -183,15 +185,6 @@ func (m *Master) GetMapTask(req *GetMapTaskRequest, resp *GetMapTaskResponse) er
 	}
 	resp.Filepaths = filePaths
 	log.Debugf("Master.GetMapTask resp: %+v", resp)
-	if resp.AllCompleted {
-		// initialize reduce tasks
-		m.safeReduceTaskInfo.mux.Lock()
-		defer m.safeReduceTaskInfo.mux.Unlock()
-		err := m.initializeReduceTask()
-		if err != nil {
-			return err
-		}
-	}
 	return nil
 }
 
@@ -211,7 +204,12 @@ func (m *Master) CompleteMapTask(req *CompleteMapTaskRequest, resp *CompleteMapT
 			log.Warnf(err.Error())
 			return err
 		}
-		log.Infof("Map id %v succeeded", req.MapTaskID)
+		if status.isCompleted() {
+			err := fmt.Errorf("Master map job is completed, id: %v", status.MapTaskID)
+			log.Warnf(err.Error())
+			return err
+		}
+		log.Infof("[Master.CompleteMapTask] Map file %v, id %v succeeded", filepath, req.MapTaskID)
 		status.Status = TaskCompleted
 		status.CompleteTime = time.Now()
 		status.IntermediateFilepaths = req.IntermediateFilepaths
@@ -223,18 +221,26 @@ func (m *Master) CompleteMapTask(req *CompleteMapTaskRequest, resp *CompleteMapT
 func (m *Master) GetReduceTask(req *GetReduceTaskRequest, resp *GetReduceTaskResponse) error {
 	m.safeReduceTaskInfo.mux.Lock()
 	defer m.safeReduceTaskInfo.mux.Unlock()
+
 	if !m.safeReduceTaskInfo.initiliazeCompleted {
-		return nil
+		// initialize reduce tasks
+		err := m.initializeReduceTask()
+		if err != nil {
+			return err
+		}
 	}
 	resp.AllCompleted = true
 	for _, status := range m.safeReduceTaskInfo.tasks {
 		if status.isPending() || status.isTimeout() {
 			resp.Filepaths = status.ReduceInputPaths
 			resp.ReduceTaskID = status.ReduceTaskID
+			status.Status = TaskRunning
+			status.StartTime = time.Now()
 			resp.AllCompleted = false
 			break
 		}
 	}
+	log.Debugf("Master.GetReduceTask resp: %+v", resp)
 	return nil
 }
 

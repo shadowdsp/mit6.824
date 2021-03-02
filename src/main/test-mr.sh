@@ -70,6 +70,13 @@ fi
 # wait for remaining workers and master to exit.
 wait ; wait ; wait
 
+if [ $failed_any -eq 0 ]; then
+    echo '***' PASSED ALL TESTS
+else
+    echo '***' FAILED SOME TESTS
+    exit 1
+fi
+
 # now indexer
 rm -f mr-*
 
@@ -99,6 +106,12 @@ fi
 
 wait ; wait
 
+if [ $failed_any -eq 0 ]; then
+    echo '***' PASSED ALL TESTS
+else
+    echo '***' FAILED SOME TESTS
+    exit 1
+fi
 
 echo '***' Starting map parallelism test.
 
@@ -129,6 +142,12 @@ fi
 
 wait ; wait
 
+if [ $failed_any -eq 0 ]; then
+    echo '***' PASSED ALL TESTS
+else
+    echo '***' FAILED SOME TESTS
+    exit 1
+fi
 
 echo '***' Starting reduce parallelism test.
 

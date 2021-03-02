@@ -90,7 +90,7 @@ func resolveMapTask(
 		}
 		// output := reducef(intermediate[i].Key, values)
 		reduceID := ihash(intermediate[i].Key) % nReduce
-		intermediateFilename := fmt.Sprintf("mr-tmp/mr-%v-%v", mapID, reduceID)
+		intermediateFilename := fmt.Sprintf("mr-%v-%v", mapID, reduceID)
 
 		// append mode
 		if _, err := os.Stat(intermediateFilename); os.IsNotExist(err) {
@@ -149,7 +149,7 @@ func resolveReduceTask(
 			return "", err
 		}
 	}
-	// log.Debugf("[Worker.resolveReduceTask] filepath: %+v, loaded kvs: %+v", filepaths, kvs)
+	log.Infof("[Worker.resolveReduceTask] reduceTaskID: %+v, filepath: %+v", reduceTaskID, filepaths)
 	sort.Sort(ByKey(kvs))
 
 	reduceOutputFilepath := "mr-out-" + reduceTaskID
@@ -196,27 +196,28 @@ func Worker(mapf func(string, string) []KeyValue,
 			break
 		}
 		// concurrently resolve map task
-		go func(resp *GetMapTaskResponse) {
-			if resp.Filepaths == nil {
-				return
-			}
-			intermediateFilenames, err := resolveMapTask(resp.MapTaskID, resp.Filepaths, resp.NReduce, mapf)
-			if err != nil {
-				log.Errorf("Failed to execute resolveMapTask(): %v", err)
-				return
-			}
+		// go func(resp *GetMapTaskResponse) {
+		if resp.Filepaths == nil {
+			continue
+		}
+		log.Debugf("[Worker] GetMapTaskResponse.Filepaths: %+v", resp.Filepaths)
+		intermediateFilenames, err := resolveMapTask(resp.MapTaskID, resp.Filepaths, resp.NReduce, mapf)
+		if err != nil {
+			log.Errorf("Failed to execute resolveMapTask(): %v", err)
+			continue
+		}
 
-			completeMapTaskRequest := CompleteMapTaskRequest{
-				Filepaths:             resp.Filepaths,
-				MapTaskID:             resp.MapTaskID,
-				IntermediateFilepaths: intermediateFilenames,
-			}
-			err = call("Master.CompleteMapTask", &completeMapTaskRequest, &CompleteMapTaskResponse{})
-			if err != nil {
-				log.Errorf("Excute RPC CompleteMapTask failed, err: %v", err)
-				return
-			}
-		}(resp)
+		completeMapTaskRequest := CompleteMapTaskRequest{
+			Filepaths:             resp.Filepaths,
+			MapTaskID:             resp.MapTaskID,
+			IntermediateFilepaths: intermediateFilenames,
+		}
+		err = call("Master.CompleteMapTask", &completeMapTaskRequest, &CompleteMapTaskResponse{})
+		if err != nil {
+			log.Errorf("Excute RPC CompleteMapTask failed, err: %v", err)
+			continue
+		}
+		// }(resp)
 	}
 
 	log.Info("================================")
@@ -232,26 +233,26 @@ func Worker(mapf func(string, string) []KeyValue,
 		if resp.AllCompleted {
 			break
 		}
-		go func(resp *GetReduceTaskResponse) {
-			if resp.Filepaths == nil {
-				return
-			}
-			reduceOutputFilepath, err := resolveReduceTask(resp.ReduceTaskID, resp.Filepaths, reducef)
-			if err != nil {
-				log.Errorf("Failed to execute resolveReduceTask(): %v", err)
-				return
-			}
+		// go func(resp *GetReduceTaskResponse) {
+		if resp.Filepaths == nil {
+			continue
+		}
+		reduceOutputFilepath, err := resolveReduceTask(resp.ReduceTaskID, resp.Filepaths, reducef)
+		if err != nil {
+			log.Errorf("Failed to execute resolveReduceTask(): %v", err)
+			continue
+		}
 
-			completeReduceTaskRequest := CompleteReduceTaskRequest{
-				ReduceTaskID:     resp.ReduceTaskID,
-				ReduceOutputPath: reduceOutputFilepath,
-			}
-			err = call("Master.CompleteReduceTask", &completeReduceTaskRequest, &CompleteMapTaskResponse{})
-			if err != nil {
-				log.Errorf("Excute RPC CompleteReduceTask failed, err: %v", err)
-				return
-			}
-		}(resp)
+		completeReduceTaskRequest := CompleteReduceTaskRequest{
+			ReduceTaskID:     resp.ReduceTaskID,
+			ReduceOutputPath: reduceOutputFilepath,
+		}
+		err = call("Master.CompleteReduceTask", &completeReduceTaskRequest, &CompleteMapTaskResponse{})
+		if err != nil {
+			log.Errorf("Excute RPC CompleteReduceTask failed, err: %v", err)
+			continue
+		}
+		// }(resp)
 	}
 
 	log.Info("================================")

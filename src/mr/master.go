@@ -27,6 +27,7 @@ type Master struct {
 	nReduce            int
 	safeMapTaskInfo    *SafeMapTaskInfo
 	safeReduceTaskInfo *SafeReduceTaskInfo
+	completed          bool
 }
 
 // MapTaskStatus MapTaskStatus
@@ -117,6 +118,8 @@ func (m *Master) initializeReduceTask() error {
 		status.ReduceTaskID = strconv.Itoa(i)
 	}
 
+	m.safeMapTaskInfo.mux.Lock()
+	defer m.safeMapTaskInfo.mux.Unlock()
 	for f, status := range m.safeMapTaskInfo.tasks {
 		log.Debugf("[Master.initializeReduceTask] Map file %v, status %v, len(ifile) %v, ifile %+v", f, status.Status, len(status.IntermediateFilepaths), status.IntermediateFilepaths)
 		for _, filepath := range status.IntermediateFilepaths {
@@ -240,6 +243,9 @@ func (m *Master) GetReduceTask(req *GetReduceTaskRequest, resp *GetReduceTaskRes
 			break
 		}
 	}
+	if resp.AllCompleted {
+		m.completed = true
+	}
 	log.Debugf("Master.GetReduceTask resp: %+v", resp)
 	return nil
 }
@@ -284,7 +290,9 @@ func (m *Master) Done() bool {
 	ret := false
 
 	// Your code here.
-
+	// if m.completed {
+	// 	ret = true
+	// }
 	return ret
 }
 

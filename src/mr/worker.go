@@ -210,6 +210,7 @@ func executeMapTask(mapf func(string, string) []KeyValue) {
 			log.Errorf("Excute RPC CompleteMapTask failed, err: %v", err)
 			continue
 		}
+		log.Debugf("[Worker] CompleteMapTask.Filepaths: %+v", completeMapTaskRequest.Filepaths)
 	}
 }
 
@@ -258,6 +259,9 @@ func Worker(mapf func(string, string) []KeyValue,
 	log.Info("================================")
 	log.Info("====== Map task succeeded ======")
 	log.Info("================================")
+
+	// hack for synchronization
+	time.Sleep(5 * time.Second)
 
 	// Reduce part
 	executeReduceTask(reducef)

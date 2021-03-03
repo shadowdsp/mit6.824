@@ -26,7 +26,8 @@ func init() {
 	// Can be any io.Writer, see below for File example
 	log.SetOutput(os.Stdout)
 	// Only log the warning severity or above.
-	log.SetLevel(log.DebugLevel)
+	// log.SetLevel(log.DebugLevel)
+	log.SetLevel(log.WarnLevel)
 	log.SetFormatter(&log.TextFormatter{
 		// DisableColors: true,
 		FullTimestamp: true,

@@ -1,5 +1,5 @@
 #!/bin/sh
-set -xe
+# set -xe
 
 #
 # basic map-reduce test

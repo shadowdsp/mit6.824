@@ -266,7 +266,7 @@ func (m *Master) CompleteReduceTask(req *CompleteReduceTaskRequest, resp *Comple
 func (m *Master) server() {
 	rpc.Register(m)
 	rpc.HandleHTTP()
-	//l, e := net.Listen("tcp", ":1234")
+	// l, e := net.Listen("tcp", ":1234")
 	sockname := masterSock()
 	os.Remove(sockname)
 	l, e := net.Listen("unix", sockname)

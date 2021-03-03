@@ -56,7 +56,8 @@ func loadPlugin(filename string) (func(string, string) []mr.KeyValue, func(strin
 func init() {
 	log.SetOutput(os.Stdout)
 	// Only log the warning severity or above.
-	log.SetLevel(log.DebugLevel)
+	// log.SetLevel(log.DebugLevel)
+	log.SetLevel(log.WarnLevel)
 	log.SetFormatter(&log.TextFormatter{
 		// DisableColors: true,
 		FullTimestamp: true,

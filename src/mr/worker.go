@@ -14,6 +14,8 @@ import (
 	log "github.com/sirupsen/logrus"
 )
 
+const taskQueryDuration = time.Duration(time.Millisecond * 500)
+
 //
 // Map functions return a slice of KeyValue.
 //
@@ -175,21 +177,12 @@ func resolveReduceTask(
 	return reduceOutputFilepath, nil
 }
 
-//
-// main/mrworker.go calls this function.
-//
-func Worker(mapf func(string, string) []KeyValue,
-	reducef func(string, []string) string) {
-
-	// Your worker implementation here.
-
-	// Map part
-	taskQueryDuration := time.Duration(time.Millisecond * 500)
+func executeMapTask(mapf func(string, string) []KeyValue) {
 	for range time.Tick(taskQueryDuration) {
 		resp, err := rpcGetMapTask()
 		if err != nil {
 			log.Errorf("Failed to execute rpcGetMapTask(): %v", err)
-			return
+			continue
 		}
 		if resp.AllCompleted {
 			// all map task are completed
@@ -217,18 +210,15 @@ func Worker(mapf func(string, string) []KeyValue,
 			log.Errorf("Excute RPC CompleteMapTask failed, err: %v", err)
 			continue
 		}
-		// }(resp)
 	}
+}
 
-	log.Info("================================")
-	log.Info("====== Map task succeeded ======")
-	log.Info("================================")
-
+func executeReduceTask(reducef func(string, []string) string) {
 	for range time.Tick(taskQueryDuration) {
 		resp, err := rpcGetReduceTask()
 		if err != nil {
 			log.Errorf("Failed to execute rpcGetReduceTask(): %v", err)
-			return
+			continue
 		}
 		if resp.AllCompleted {
 			break
@@ -252,9 +242,25 @@ func Worker(mapf func(string, string) []KeyValue,
 			log.Errorf("Excute RPC CompleteReduceTask failed, err: %v", err)
 			continue
 		}
-		// }(resp)
 	}
+}
 
+//
+// main/mrworker.go calls this function.
+//
+func Worker(mapf func(string, string) []KeyValue,
+	reducef func(string, []string) string) {
+
+	// Your worker implementation here.
+
+	// Map part
+	executeMapTask(mapf)
+	log.Info("================================")
+	log.Info("====== Map task succeeded ======")
+	log.Info("================================")
+
+	// Reduce part
+	executeReduceTask(reducef)
 	log.Info("================================")
 	log.Info("===== Reduce task succeeded ====")
 	log.Info("================================")
@@ -293,7 +299,8 @@ func call(rpcname string, args interface{}, reply interface{}) error {
 	sockname := masterSock()
 	c, err := rpc.DialHTTP("unix", sockname)
 	if err != nil {
-		log.Fatal("dialing:", err)
+		// log.Fatal("dialing:", err)
+		return err
 	}
 	defer c.Close()
 

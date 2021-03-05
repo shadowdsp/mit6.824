@@ -22,12 +22,13 @@ const (
 	TimeoutLimit  = 10 * time.Second
 )
 
+// Master master server
 type Master struct {
 	// Your definitions here.
 	nReduce            int
 	safeMapTaskInfo    *SafeMapTaskInfo
 	safeReduceTaskInfo *SafeReduceTaskInfo
-	completed          bool
+	allTaskCompleted   bool
 }
 
 // MapTaskStatus MapTaskStatus
@@ -139,20 +140,7 @@ func (m *Master) initializeReduceTask() error {
 	return nil
 }
 
-// TaskAllocations map[filename]MapTaskID
-// type TaskAllocations map[string][]string
-
 // Your code here -- RPC handlers for the worker to call.
-
-//
-// an example RPC handler.
-//
-// the RPC argument and reply types are defined in rpc.go.
-//
-func (m *Master) Example(args *ExampleArgs, reply *ExampleReply) error {
-	reply.Y = args.X + 1
-	return nil
-}
 
 // GetMapTask GetMapTask
 func (m *Master) GetMapTask(req *GetMapTaskRequest, resp *GetMapTaskResponse) error {
@@ -166,7 +154,6 @@ func (m *Master) GetMapTask(req *GetMapTaskRequest, resp *GetMapTaskResponse) er
 	// tips: if startTime + 10 < nowTime, this task should be redo
 	m.safeMapTaskInfo.mux.Lock()
 	defer m.safeMapTaskInfo.mux.Unlock()
-	// TODO: if all map tasks are allocated, should notify worker to do reduce
 	log.Debugf("Master.GetMapTask filepaths: %+v\n", m.safeMapTaskInfo.filepaths)
 	for _, filepath := range m.safeMapTaskInfo.filepaths {
 		if m.safeMapTaskInfo.tasks[filepath] == nil {
@@ -212,7 +199,7 @@ func (m *Master) CompleteMapTask(req *CompleteMapTaskRequest, resp *CompleteMapT
 			log.Warnf(err.Error())
 			return err
 		}
-		log.Infof("[Master.CompleteMapTask] Map file %v, id %v succeeded", filepath, req.MapTaskID)
+		log.Debugf("[Master.CompleteMapTask] Map file %v, id %v succeeded", filepath, req.MapTaskID)
 		status.Status = TaskCompleted
 		status.CompleteTime = time.Now()
 		status.IntermediateFilepaths = req.IntermediateFilepaths
@@ -244,7 +231,7 @@ func (m *Master) GetReduceTask(req *GetReduceTaskRequest, resp *GetReduceTaskRes
 		}
 	}
 	if resp.AllCompleted {
-		m.completed = true
+		m.allTaskCompleted = true
 	}
 	log.Debugf("Master.GetReduceTask resp: %+v", resp)
 	return nil
@@ -290,9 +277,9 @@ func (m *Master) Done() bool {
 	ret := false
 
 	// Your code here.
-	// if m.completed {
-	// 	ret = true
-	// }
+	if m.allTaskCompleted {
+		ret = true
+	}
 	return ret
 }
 
@@ -302,6 +289,7 @@ func (m *Master) Done() bool {
 // nReduce is the number of reduce tasks to use.
 //
 func MakeMaster(files []string, nReduce int) *Master {
+	// Your code here.
 	log.Infof("Master nReduce: %+v\n", nReduce)
 	log.Infof("Master resolve files: %+v\n", files)
 	m := Master{
@@ -311,8 +299,6 @@ func MakeMaster(files []string, nReduce int) *Master {
 			initiliazeCompleted: false,
 		},
 	}
-
-	// Your code here.
 
 	m.server()
 	return &m

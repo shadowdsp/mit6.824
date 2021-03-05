@@ -77,7 +77,6 @@ func resolveMapTask(
 	}
 	// sort the intermediate value
 	sort.Sort(ByKey(intermediate))
-	// log.Debugf("[Worker.resolveMapTask] filepath: %+v, intermediate: %+v", filenames, intermediate)
 	intermediateFilenames := []string{}
 	intermediateMap := make(map[string]struct{})
 	i := 0
@@ -90,7 +89,6 @@ func resolveMapTask(
 		for k := i; k < j; k++ {
 			tmpKvs = append(tmpKvs, intermediate[k])
 		}
-		// output := reducef(intermediate[i].Key, values)
 		reduceID := ihash(intermediate[i].Key) % nReduce
 		intermediateFilename := fmt.Sprintf("mr-%v-%v", mapID, reduceID)
 
@@ -151,7 +149,7 @@ func resolveReduceTask(
 			return "", err
 		}
 	}
-	log.Infof("[Worker.resolveReduceTask] reduceTaskID: %+v, filepath: %+v", reduceTaskID, filepaths)
+	log.Debugf("[Worker.resolveReduceTask] reduceTaskID: %+v, filepath: %+v", reduceTaskID, filepaths)
 	sort.Sort(ByKey(kvs))
 
 	reduceOutputFilepath := "mr-out-" + reduceTaskID
@@ -188,8 +186,6 @@ func executeMapTask(mapf func(string, string) []KeyValue) {
 			// all map task are completed
 			break
 		}
-		// concurrently resolve map task
-		// go func(resp *GetMapTaskResponse) {
 		if resp.Filepaths == nil {
 			continue
 		}
@@ -224,7 +220,6 @@ func executeReduceTask(reducef func(string, []string) string) {
 		if resp.AllCompleted {
 			break
 		}
-		// go func(resp *GetReduceTaskResponse) {
 		if resp.Filepaths == nil {
 			continue
 		}
@@ -283,16 +278,6 @@ func rpcGetReduceTask() (*GetReduceTaskResponse, error) {
 	return &response, err
 }
 
-// func rpcCompleteMapTask() (*CompleteMapTaskResponse, error) {
-// 	response := CompleteMapTaskResponse{}
-// 	ok := call("Master.CompleteMapTask", &CompleteMapTaskRequest{}, &response)
-// 	if !ok {
-// 		return nil, errors.New("RPCCompleteMapTask failed")
-// 	}
-// 	fmt.Printf("RPCCompleteMapTask result: %+v\n", response)
-// 	return &response, nil
-// }
-
 //
 // send an RPC request to the master, wait for the response.
 // usually returns true.
@@ -303,7 +288,6 @@ func call(rpcname string, args interface{}, reply interface{}) error {
 	sockname := masterSock()
 	c, err := rpc.DialHTTP("unix", sockname)
 	if err != nil {
-		// log.Fatal("dialing:", err)
 		return err
 	}
 	defer c.Close()
@@ -311,26 +295,3 @@ func call(rpcname string, args interface{}, reply interface{}) error {
 	err = c.Call(rpcname, args, reply)
 	return err
 }
-
-//
-// example function to show how to make an RPC call to the master.
-//
-// the RPC argument and reply types are defined in rpc.go.
-//
-// func CallExample() {
-
-// 	// declare an argument structure.
-// 	args := ExampleArgs{}
-
-// 	// fill in the argument(s).
-// 	args.X = 99
-
-// 	// declare a reply structure.
-// 	reply := ExampleReply{}
-
-// 	// send the RPC request, wait for the reply.
-// 	call("Master.Example", &args, &reply)
-
-// 	// reply.Y should be 100.
-// 	fmt.Printf("reply.Y %v\n", reply.Y)
-// }

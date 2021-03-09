@@ -1,7 +1,6 @@
 package mr
 
 import (
-	"fmt"
 	"net"
 	"net/http"
 	"net/rpc"
@@ -11,245 +10,155 @@ import (
 	"sync"
 	"time"
 
-	"github.com/google/uuid"
 	log "github.com/sirupsen/logrus"
 )
 
 const (
-	TaskPending   = 0
-	TaskRunning   = 1
-	TaskCompleted = 2
-	TimeoutLimit  = 10 * time.Second
+	TaskPending   = "Pending"
+	TaskRunning   = "Running"
+	TaskCompleted = "Completed"
+
+	TaskTypeMap    = "Map"
+	TaskTypeReduce = "Reduce"
+	TaskTypeNone   = "None"
+
+	TaskTimeoutLimit = 10 * time.Second
 )
 
 // Master master server
 type Master struct {
 	// Your definitions here.
-	nReduce            int
-	safeMapTaskInfo    *SafeMapTaskInfo
-	safeReduceTaskInfo *SafeReduceTaskInfo
-	allTaskCompleted   bool
+	nReduce                    int
+	mapTasks                   []*Task
+	reduceTasks                []*Task
+	incompletedMapTaskCount    int
+	incompletedReduceTaskCount int
+	reduceInitialied           bool
+	mux                        sync.Mutex
 }
 
-// MapTaskStatus MapTaskStatus
-type MapTaskStatus struct {
-	// TODO: use enum
-	// 0 unallocated, 1 allocated and incompleted, 2 completed
-	Status                uint8
-	StartTime             time.Time
-	CompleteTime          time.Time
-	MapTaskID             string
-	IntermediateFilepaths []string
+func (t *Task) isCompleted() bool {
+	return t.phase == TaskCompleted
 }
 
-func (st *MapTaskStatus) isCompleted() bool {
-	return st.Status == TaskCompleted
+func (t *Task) isPending() bool {
+	return t.phase == TaskPending
 }
 
-func (st *MapTaskStatus) isPending() bool {
-	return st.Status == TaskPending
+type Task struct {
+	phase    string
+	taskID   int
+	taskType string
+	// for map, input path has only one element
+	inputPaths []string
+	// for reduce, output path has only one element
+	outputPaths []string
 }
 
-func (st *MapTaskStatus) isTimeout() bool {
-	return !st.isCompleted() && st.StartTime.Add(TimeoutLimit).Before(time.Now())
-}
-
-// SafeMapTaskInfo SafeMapTaskInfo
-type SafeMapTaskInfo struct {
-	tasks     map[string]*MapTaskStatus
-	filepaths []string
-	mux       sync.Mutex
-}
-
-func newMapTaskInfo(filepaths []string) *SafeMapTaskInfo {
-	mapTaskInfo := SafeMapTaskInfo{}
-	mapTaskInfo.filepaths = filepaths
-	mapTaskInfo.tasks = make(map[string]*MapTaskStatus)
-	return &mapTaskInfo
-}
-
-func newMapTaskStatus() *MapTaskStatus {
-	return &MapTaskStatus{
-		Status: TaskPending,
-	}
-}
-
-func (st *ReduceTaskStatus) isCompleted() bool {
-	return st.Status == TaskCompleted
-}
-
-func (st *ReduceTaskStatus) isPending() bool {
-	return st.Status == TaskPending
-}
-
-func (st *ReduceTaskStatus) isTimeout() bool {
-	return !st.isCompleted() && st.StartTime.Add(TimeoutLimit).Before(time.Now())
-}
-
-// ReduceTaskStatus ReduceTaskStatus
-type ReduceTaskStatus struct {
-	// TODO: use enum
-	// 0 unallocated, 1 allocated and incompleted, 2 completed
-	Status           uint8
-	StartTime        time.Time
-	CompleteTime     time.Time
-	ReduceTaskID     string
-	ReduceInputPaths []string
-	ReduceOutputPath string
-}
-
-// SafeReduceTaskInfo SafeReduceTaskInfo
-type SafeReduceTaskInfo struct {
-	tasks               map[string]*ReduceTaskStatus
-	initiliazeCompleted bool
-	mux                 sync.Mutex
-}
-
-func newReduceTaskStatus() *ReduceTaskStatus {
-	return &ReduceTaskStatus{
-		Status: TaskPending,
-	}
-}
-
-func (m *Master) initializeReduceTask() error {
-	m.safeReduceTaskInfo.tasks = make(map[string]*ReduceTaskStatus, m.nReduce)
-	for i := 0; i < m.nReduce; i++ {
-		m.safeReduceTaskInfo.tasks[strconv.Itoa(i)] = newReduceTaskStatus()
-		status := m.safeReduceTaskInfo.tasks[strconv.Itoa(i)]
-		status.ReduceTaskID = strconv.Itoa(i)
-	}
-
-	m.safeMapTaskInfo.mux.Lock()
-	defer m.safeMapTaskInfo.mux.Unlock()
-	for f, status := range m.safeMapTaskInfo.tasks {
-		log.Debugf("[Master.initializeReduceTask] Map file %v, status %v, len(ifile) %v, ifile %+v", f, status.Status, len(status.IntermediateFilepaths), status.IntermediateFilepaths)
-		for _, filepath := range status.IntermediateFilepaths {
-			tmp := strings.Split(filepath, "-")
-			reduceID := tmp[len(tmp)-1]
-			if rStatus, ok := m.safeReduceTaskInfo.tasks[reduceID]; ok {
-				rStatus.ReduceInputPaths = append(rStatus.ReduceInputPaths, filepath)
-				// log.Debugf("[Master.initializeReduceTask] reduceTaskID %v has input paths: %+v", rStatus.ReduceTaskID, rStatus.ReduceInputPaths)
-			} else {
-				err := fmt.Errorf("IntermediateFilepath %v is not match reduce number %v", filepath, m.nReduce)
-				log.Errorf(err.Error())
+func (m *Master) initReduceTasksInput() error {
+	reduceTasksInput := make([][]string, m.nReduce)
+	for _, t := range m.mapTasks {
+		for _, out := range t.outputPaths {
+			tmp := strings.Split(out, "-")
+			reduceID, err := strconv.Atoi(tmp[len(tmp)-1])
+			if err != nil {
+				log.Errorf("[initReduceTasksInput] parse filename err: %v", err)
 				return err
 			}
+			reduceTasksInput[reduceID] = append(reduceTasksInput[reduceID], out)
 		}
 	}
-	m.safeReduceTaskInfo.initiliazeCompleted = true
+
+	for reduceID, task := range m.reduceTasks {
+		task.inputPaths = reduceTasksInput[reduceID]
+	}
 	return nil
+}
+
+func (m *Master) checkTaskTimeout(task *Task) {
+	<-time.After(TaskTimeoutLimit)
+	m.mux.Lock()
+	defer m.mux.Unlock()
+	if task.phase == TaskCompleted {
+		return
+	}
+	switch task.taskType {
+	case TaskTypeMap:
+		m.mapTasks[task.taskID].phase = TaskPending
+	case TaskTypeReduce:
+		m.reduceTasks[task.taskID].phase = TaskPending
+	default:
+		log.Errorf("unknown task type %v in checkTaskTimeout", task.taskType)
+	}
 }
 
 // Your code here -- RPC handlers for the worker to call.
 
-// GetMapTask GetMapTask
-func (m *Master) GetMapTask(req *GetMapTaskRequest, resp *GetMapTaskResponse) error {
-	// TODO: get uuid here
+//
+// an example RPC handler.
+//
+// the RPC argument and reply types are defined in rpc.go.
+//
+func (m *Master) Example(args *ExampleArgs, reply *ExampleReply) error {
+	reply.Y = args.X + 1
+	return nil
+}
+
+func (m *Master) GetTask(req *GetTaskRequest, resp *GetTaskResponse) error {
+	m.mux.Lock()
+	defer m.mux.Unlock()
+
 	resp.NReduce = m.nReduce
-	// TODO: change to filename hash
-	resp.MapTaskID = uuid.New().String()[:8]
-	resp.AllCompleted = true
-	filePaths := []string{}
-	// Traverse task and get the incompleted task, need to lock
-	// tips: if startTime + 10 < nowTime, this task should be redo
-	m.safeMapTaskInfo.mux.Lock()
-	defer m.safeMapTaskInfo.mux.Unlock()
-	log.Debugf("Master.GetMapTask filepaths: %+v\n", m.safeMapTaskInfo.filepaths)
-	for _, filepath := range m.safeMapTaskInfo.filepaths {
-		if m.safeMapTaskInfo.tasks[filepath] == nil {
-			m.safeMapTaskInfo.tasks[filepath] = newMapTaskStatus()
-		}
-		status := m.safeMapTaskInfo.tasks[filepath]
-		if status.isPending() || status.isTimeout() {
-			// can be allocated
-			filePaths = append(filePaths, filepath)
-			// mark filepath is allocated
-			status.StartTime = time.Now()
-			status.Status = TaskRunning
-			status.MapTaskID = resp.MapTaskID
-			resp.AllCompleted = false
-			// one task one filepath
+	var tasks []*Task
+	if m.incompletedMapTaskCount > 0 {
+		tasks = m.mapTasks
+	} else if m.incompletedReduceTaskCount > 0 {
+		tasks = m.reduceTasks
+	} else {
+		resp.TaskType = TaskTypeNone
+		return nil
+	}
+
+	// task pending/running
+	for _, t := range tasks {
+		if t.isPending() {
+			resp.TaskID = t.taskID
+			resp.TaskInputs = t.inputPaths
+			resp.TaskType = t.taskType
+			log.Debugf("[Master.GetTask] pending task: %+v", t)
+			t.phase = TaskRunning
+			go m.checkTaskTimeout(t)
 			break
 		}
-		log.Debugf("Master.GetMapTask status: %+v\n", status)
 	}
-	resp.Filepaths = filePaths
-	log.Debugf("Master.GetMapTask resp: %+v", resp)
-	return nil
-}
 
-// CompleteMapTask CompleteMapTask
-func (m *Master) CompleteMapTask(req *CompleteMapTaskRequest, resp *CompleteMapTaskResponse) error {
-	m.safeMapTaskInfo.mux.Lock()
-	defer m.safeMapTaskInfo.mux.Unlock()
-	for _, filepath := range req.Filepaths {
-		status, ok := m.safeMapTaskInfo.tasks[filepath]
-		if !ok {
-			err := fmt.Errorf("file path %+v is not exist in task info", filepath)
-			log.Errorf(err.Error())
-			return err
-		}
-		if status.MapTaskID != req.MapTaskID {
-			err := fmt.Errorf("Master map id %v is not match request map id %v", status.MapTaskID, req.MapTaskID)
-			log.Warnf(err.Error())
-			return err
-		}
-		if status.isCompleted() {
-			err := fmt.Errorf("Master map job is completed, id: %v", status.MapTaskID)
-			log.Warnf(err.Error())
-			return err
-		}
-		log.Debugf("[Master.CompleteMapTask] Map file %v, id %v succeeded", filepath, req.MapTaskID)
-		status.Status = TaskCompleted
-		status.CompleteTime = time.Now()
-		status.IntermediateFilepaths = req.IntermediateFilepaths
+	if len(resp.TaskInputs) <= 0 {
+		resp.TaskType = TaskTypeNone
 	}
 	return nil
 }
 
-// GetReduceTask GetReduceTask
-func (m *Master) GetReduceTask(req *GetReduceTaskRequest, resp *GetReduceTaskResponse) error {
-	m.safeReduceTaskInfo.mux.Lock()
-	defer m.safeReduceTaskInfo.mux.Unlock()
+func (m *Master) CompleteTask(req *CompleteTaskRequest, resp *CompleteTaskResponse) error {
+	m.mux.Lock()
+	defer m.mux.Unlock()
 
-	if !m.safeReduceTaskInfo.initiliazeCompleted {
-		// initialize reduce tasks
-		err := m.initializeReduceTask()
+	if req.TaskType == TaskTypeMap {
+		m.mapTasks[req.TaskID].phase = TaskCompleted
+		m.mapTasks[req.TaskID].outputPaths = req.TaskOutputs
+		m.incompletedMapTaskCount--
+	} else if req.TaskType == TaskTypeReduce {
+		m.reduceTasks[req.TaskID].phase = TaskCompleted
+		m.reduceTasks[req.TaskID].outputPaths = req.TaskOutputs
+		m.incompletedReduceTaskCount--
+	}
+
+	if m.incompletedMapTaskCount <= 0 && !m.reduceInitialied {
+		err := m.initReduceTasksInput()
 		if err != nil {
-			return err
+			os.Exit(1)
 		}
+		m.reduceInitialied = true
 	}
-	resp.AllCompleted = true
-	for _, status := range m.safeReduceTaskInfo.tasks {
-		if status.isPending() || status.isTimeout() {
-			resp.Filepaths = status.ReduceInputPaths
-			resp.ReduceTaskID = status.ReduceTaskID
-			status.Status = TaskRunning
-			status.StartTime = time.Now()
-			resp.AllCompleted = false
-			break
-		}
-	}
-	if resp.AllCompleted {
-		m.allTaskCompleted = true
-	}
-	log.Debugf("Master.GetReduceTask resp: %+v", resp)
-	return nil
-}
-
-// CompleteReduceTask CompleteReduceTask
-func (m *Master) CompleteReduceTask(req *CompleteReduceTaskRequest, resp *CompleteReduceTaskResponse) error {
-	m.safeReduceTaskInfo.mux.Lock()
-	defer m.safeReduceTaskInfo.mux.Unlock()
-	status, ok := m.safeReduceTaskInfo.tasks[req.ReduceTaskID]
-	if !ok {
-		err := fmt.Errorf("Execute CompleteReduceTask() failed, ReduceTaskID %v cannot be found in tasks", req.ReduceTaskID)
-		log.Errorf(err.Error())
-		return err
-	}
-	status.Status = TaskCompleted
-	status.CompleteTime = time.Now()
-	status.ReduceOutputPath = req.ReduceOutputPath
 	return nil
 }
 
@@ -277,7 +186,7 @@ func (m *Master) Done() bool {
 	ret := false
 
 	// Your code here.
-	if m.allTaskCompleted {
+	if m.incompletedMapTaskCount <= 0 && m.incompletedReduceTaskCount <= 0 {
 		ret = true
 	}
 	return ret
@@ -292,14 +201,30 @@ func MakeMaster(files []string, nReduce int) *Master {
 	// Your code here.
 	log.Infof("Master nReduce: %+v\n", nReduce)
 	log.Infof("Master resolve files: %+v\n", files)
-	m := Master{
-		nReduce:         nReduce,
-		safeMapTaskInfo: newMapTaskInfo(files),
-		safeReduceTaskInfo: &SafeReduceTaskInfo{
-			initiliazeCompleted: false,
-		},
+	mapTasks := []*Task{}
+	for i, file := range files {
+		mapTasks = append(mapTasks, &Task{
+			phase:      TaskPending,
+			taskID:     i,
+			taskType:   TaskTypeMap,
+			inputPaths: []string{file},
+		})
 	}
-
+	reduceTasks := []*Task{}
+	for i := 0; i < nReduce; i++ {
+		reduceTasks = append(reduceTasks, &Task{
+			phase:    TaskPending,
+			taskID:   i,
+			taskType: TaskTypeReduce,
+		})
+	}
+	m := Master{
+		nReduce:                    nReduce,
+		mapTasks:                   mapTasks,
+		reduceTasks:                reduceTasks,
+		incompletedMapTaskCount:    len(mapTasks),
+		incompletedReduceTaskCount: len(reduceTasks),
+	}
 	m.server()
 	return &m
 }

@@ -26,39 +26,56 @@ type ExampleReply struct {
 
 // Add your RPC definitions here.
 
-// GetMapTaskRequest GetMapTaskRequest
-type GetMapTaskRequest struct{}
+type GetTaskRequest struct{}
 
-// GetMapTaskResponse GetMapTaskResponse
-type GetMapTaskResponse struct {
-	Filepaths    []string
-	MapTaskID    string
-	NReduce      int
-	AllCompleted bool
+type GetTaskResponse struct {
+	TaskType   string
+	TaskID     int
+	TaskInputs []string
+	NReduce    int
 }
 
-type CompleteMapTaskRequest struct {
-	Filepaths             []string
-	MapTaskID             string
-	IntermediateFilepaths []string
+type CompleteTaskRequest struct {
+	TaskType    string
+	TaskID      int
+	TaskOutputs []string
 }
 
-type CompleteMapTaskResponse struct{}
+type CompleteTaskResponse struct{}
 
-type GetReduceTaskRequest struct{}
+// // GetMapTaskRequest GetMapTaskRequest
+// type GetMapTaskRequest struct{}
 
-type GetReduceTaskResponse struct {
-	Filepaths    []string
-	ReduceTaskID string
-	AllCompleted bool
-}
+// // GetMapTaskResponse GetMapTaskResponse
+// type GetMapTaskResponse struct {
+// 	Filepaths    []string
+// 	MapTaskID    string
+// 	NReduce      int
+// 	AllCompleted bool
+// }
 
-type CompleteReduceTaskRequest struct {
-	ReduceTaskID     string
-	ReduceOutputPath string
-}
+// type CompleteMapTaskRequest struct {
+// 	Filepaths             []string
+// 	MapTaskID             string
+// 	IntermediateFilepaths []string
+// }
 
-type CompleteReduceTaskResponse struct{}
+// type CompleteMapTaskResponse struct{}
+
+// type GetReduceTaskRequest struct{}
+
+// type GetReduceTaskResponse struct {
+// 	Filepaths    []string
+// 	ReduceTaskID string
+// 	AllCompleted bool
+// }
+
+// type CompleteReduceTaskRequest struct {
+// 	ReduceTaskID     string
+// 	ReduceOutputPath string
+// }
+
+// type CompleteReduceTaskResponse struct{}
 
 // Cook up a unique-ish UNIX-domain socket name
 // in /var/tmp, for the master.

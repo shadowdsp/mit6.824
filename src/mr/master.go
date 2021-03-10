@@ -33,7 +33,7 @@ type Master struct {
 	reduceTasks                []*Task
 	incompletedMapTaskCount    int
 	incompletedReduceTaskCount int
-	reduceInitialied           bool
+	reduceInitialized          bool
 	mux                        sync.Mutex
 }
 
@@ -46,6 +46,7 @@ func (t *Task) isPending() bool {
 }
 
 type Task struct {
+	// Pending, Running and Completed
 	phase    string
 	taskID   int
 	taskType string
@@ -152,12 +153,12 @@ func (m *Master) CompleteTask(req *CompleteTaskRequest, resp *CompleteTaskRespon
 		m.incompletedReduceTaskCount--
 	}
 
-	if m.incompletedMapTaskCount <= 0 && !m.reduceInitialied {
+	if m.incompletedMapTaskCount <= 0 && !m.reduceInitialized {
 		err := m.initReduceTasksInput()
 		if err != nil {
 			os.Exit(1)
 		}
-		m.reduceInitialied = true
+		m.reduceInitialized = true
 	}
 	return nil
 }

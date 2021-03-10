@@ -198,7 +198,7 @@ func Worker(mapf func(string, string) []KeyValue,
 		if !ok {
 			os.Exit(1)
 		}
-		log.Infof("worker get task resp: %+v", getTaskResp)
+		log.Debugf("worker get task resp: %+v", getTaskResp)
 
 		completeTaskReq := CompleteTaskRequest{
 			TaskID:   getTaskResp.TaskID,

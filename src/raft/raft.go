@@ -17,14 +17,16 @@ package raft
 //   in the same server.
 //
 
-import "sync"
-import "sync/atomic"
-import "../labrpc"
+import (
+	"context"
+	"sync"
+	"sync/atomic"
+
+	"mit6.824/src/labrpc"
+)
 
 // import "bytes"
 // import "../labgob"
-
-
 
 //
 // as each Raft peer becomes aware that successive log entries are
@@ -43,6 +45,10 @@ type ApplyMsg struct {
 	CommandIndex int
 }
 
+const (
+	HeartbeatTimeout = 1 * time.Second
+)
+
 //
 // A Go object implementing a single Raft peer.
 //
@@ -57,6 +63,34 @@ type Raft struct {
 	// Look at the paper's Figure 2 for a description of what
 	// state a Raft server must maintain.
 
+	// 1 follower, 2 candidate, 3 leader
+	role string
+
+	// Persistent state on server
+	currentTerm int
+	votedFor    *int
+	logs        []*LogEntry
+
+	// Volatile state on server
+	commitIndex int
+	lastApplied int
+
+	// Volatile state on leader
+	nextIndex []int
+	matchIndex []int
+
+	// the last heartbeat time received from leader
+	lastHeartbeatTime time.Time
+}
+
+type LogEntry struct {
+	Content string
+	Term    int
+	Index   int
+}
+
+func (le *LogEntry) isSame(new *LogEntry) bool {
+	return le.Index == new.Index && le.Term == new.Term && le.Content == new.Content
 }
 
 // return currentTerm and whether this server
@@ -85,7 +119,6 @@ func (rf *Raft) persist() {
 	// rf.persister.SaveRaftState(data)
 }
 
-
 //
 // restore previously persisted state.
 //
@@ -108,15 +141,16 @@ func (rf *Raft) readPersist(data []byte) {
 	// }
 }
 
-
-
-
 //
 // example RequestVote RPC arguments structure.
 // field names must start with capital letters!
 //
 type RequestVoteArgs struct {
 	// Your data here (2A, 2B).
+	Term         int
+	CandidateID  int
+	LastLogIndex int
+	LastLogTerm  int
 }
 
 //
@@ -125,6 +159,25 @@ type RequestVoteArgs struct {
 //
 type RequestVoteReply struct {
 	// Your data here (2A).
+	Term        int
+	VoteGranted bool
+}
+
+// AppendEntriesArgs RPC argument structure
+type AppendEntriesArgs struct {
+	Term         int
+	LeaderID     int
+	PrevLogIndex int
+	PrevLogTerm  int
+	Logs         []*LogEntry
+	LeaderCommit int
+}
+
+// AppendEntriesReply RPC reply structure
+type AppendEntriesReply struct {
+	Term int
+	// true if follower contained entry matching prevLogIndex and prevLogTerm
+	Success bool
 }
 
 //
@@ -132,6 +185,79 @@ type RequestVoteReply struct {
 //
 func (rf *Raft) RequestVote(args *RequestVoteArgs, reply *RequestVoteReply) {
 	// Your code here (2A, 2B).
+	reply.Term = rf.currentTerm
+	if args.Term < rf.currentTerm {
+		reply.VoteGranted = false
+		return
+	}
+
+	if rf.votedFor == nil || *rf.votedFor == args.CandidateID {
+		// if args.lastLogIndex >
+	}
+}
+
+// AppendEntries AppendEntries RPC handler
+// Invoked by leader to replicate log entries (§5.3); also used as heartbeat
+func (rf *Raft) AppendEntries(args *AppendEntriesArgs, reply *AppendEntriesReply) {
+	// TODO: We need a more efficient data-structrue to maintain logs
+	reply.Term = rf.currentTerm
+	reply.Success = true
+
+	// Rule 1: Reply false if term < currentTerm
+	if args.Term < rf.currentTerm {
+		reply.Success = false
+		return
+	}
+
+	// Rule 2: Reply false if log doesn’t contain an entry at prevLogIndex
+	// whose term matches prevLogTerm
+	exist := false
+	for _, entry := range rf.logs {
+		if entry.Term == args.PrevLogTerm && entry.Index == args.PrevLogIndex {
+			exist = true
+		}
+	}
+	if !exist {
+		reply.Success = false
+		return
+	}
+
+	// Rule 3: If an existing entry conflicts with a new one (same index but different terms),
+	// delete the existing entry and all that follow it
+	deleteIndex := -1
+	for i, entry := range rf.logs {
+		for _, nEntry := range args.Logs {
+			if entry.Index == nEntry.Index && entry.Term != nEntry.Term {
+				deleteIndex = i
+				break
+			}
+		}
+		if deleteIndex != -1 {
+			break
+		}
+	}
+	if deleteIndex != -1 {
+		rf.logs = rf.logs[:deleteIndex]
+	}
+
+	// Rule 4: Append any new entries not already in the log
+	for _, nEntry := args.Logs {
+		exist := false
+		for _, entry := range rf.logs {
+			if nEntry.isSame(entry) {
+				exist = true
+			}
+		}
+		if !exist {
+			rf.logs = append(rf.logs, nEntry)
+		}
+	}
+
+	// Rule 5: If leaderCommit > commitIndex, set commitIndex = min(leaderCommit, index of last new entry)
+	if args.LeaderCommit > rf.commitIndex {
+		rf.commitIndex = min(args.Leadercommit, rf.logs[len(rf.logs) - 1].Index)
+	}
+	return
 }
 
 //
@@ -168,6 +294,9 @@ func (rf *Raft) sendRequestVote(server int, args *RequestVoteArgs, reply *Reques
 	return ok
 }
 
+func (rf *Raft) sendAppendEntries(server int, args *AppendEntriesArgs, reply *AppendEntriesReply) bool {
+	return rf.peers[server].Call("Raft.AppendEntries", args, reply)
+}
 
 //
 // the service using Raft (e.g. a k/v server) wants to start
@@ -189,7 +318,6 @@ func (rf *Raft) Start(command interface{}) (int, int, bool) {
 	isLeader := true
 
 	// Your code here (2B).
-
 
 	return index, term, isLeader
 }
@@ -233,11 +361,33 @@ func Make(peers []*labrpc.ClientEnd, me int,
 	rf.persister = persister
 	rf.me = me
 
+	ctx := context.Background()
 	// Your initialization code here (2A, 2B, 2C).
+	go func(ctx context.Context) {
+		// If not receieved heartbeat from leader for a while, start leader election.
+		if isLeaderElectionState(ctx) {
+			for i := 0; i < len(rf.peers); i++ {
+				if i == me {
+					continue
+				}
+				
+				args := &RequestVoteArgs{
+					Term: rf.currentTerm,
+					CandidateID: rf.me,
+					LastLogIndex: len(rf.logs) - 1,
+					LastLogTerm: rf.logs[len(rf.logs) - 1].Term,
+				}
+				reply := &RequestVoteReply{}
+				go rf.sendRequestVote(i, args, reply)
+				if reply.VoteGranted {
+					
+				}
+			}
+		}
+	}(ctx)
 
 	// initialize from state persisted before a crash
 	rf.readPersist(persister.ReadRaftState())
-
 
 	return rf
 }

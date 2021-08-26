@@ -75,12 +75,18 @@ type Raft struct {
 	commitIndex int
 	lastApplied int
 
+	// Volatile state on candidate
+	receivedVote map[int]bool
+
 	// Volatile state on leader
 	nextIndex []int
 	matchIndex []int
 
 	// the last heartbeat time received from leader
 	lastHeartbeatTime time.Time
+
+	// electionTimer
+	electionTimer time.Duration
 }
 
 type LogEntry struct {
@@ -186,14 +192,18 @@ type AppendEntriesReply struct {
 func (rf *Raft) RequestVote(args *RequestVoteArgs, reply *RequestVoteReply) {
 	// Your code here (2A, 2B).
 	reply.Term = rf.currentTerm
+	reply.VoteGranted = false
 	if args.Term < rf.currentTerm {
-		reply.VoteGranted = false
 		return
 	}
 
 	if rf.votedFor == nil || *rf.votedFor == args.CandidateID {
-		// if args.lastLogIndex >
+		// Make sure candidate is as up to date as follower
+		if args.lastLogIndex <= len(rf.logs) - 1 && args.LastLogTerm <= rf.logs[len(rf.logs) - 1].Term {
+			reply.VoteGranted = true
+		}
 	}
+	return
 }
 
 // AppendEntries AppendEntries RPC handler
@@ -364,8 +374,20 @@ func Make(peers []*labrpc.ClientEnd, me int,
 	ctx := context.Background()
 	// Your initialization code here (2A, 2B, 2C).
 	go func(ctx context.Context) {
-		// If not receieved heartbeat from leader for a while, start leader election.
-		if isLeaderElectionState(ctx) {
+		// If 1. not receieved heartbeat from leader for a while,
+		//    2. not vote for other candidate.
+		// become a candidate and start leader election.
+		if rf.heartbeatTimeout(ctx) && rf.votedFor == nil {
+			// Become a candidate
+			// 1. Increase currentTerm;
+			rf.currentTerm++
+			// 2. Vote for self;
+			rf.votedFor = &me
+			// 3. Reset election timer;
+
+			// 4. Send RequestVote RPC to other servers.
+
+			// TODO: Set election random timeout with context
 			for i := 0; i < len(rf.peers); i++ {
 				if i == me {
 					continue

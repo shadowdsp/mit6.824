@@ -21,6 +21,8 @@ import (
 	"context"
 	"sync"
 	"sync/atomic"
+	"time"
+	"math/rand"
 
 	"mit6.824/src/labrpc"
 )
@@ -46,7 +48,9 @@ type ApplyMsg struct {
 }
 
 const (
-	HeartbeatTimeout = 1 * time.Second
+	heartbeatTimeoutLimit = 1 * time.Second
+	electionTimeoutLowerBound = 150
+	electionTimeoutUpperBound = 300
 )
 
 //
@@ -353,6 +357,18 @@ func (rf *Raft) killed() bool {
 	return z == 1
 }
 
+// Customized functions
+func (rf *Raft) isHeartbeatTimeout() bool {
+	rf.mu.Lock()
+	defer rf.mu.Unlock()
+	return time.After(lastHeartbeatTime.Add(heartbeatTimeoutLimit))
+}
+
+func (rf *Raft) getRandomElectionTimeout() time.Duration {
+    return time.Millisecond * (rand.Intn(electionTimeoutUpperBound - electionTimeoutLowerBound) + electionTimeoutLowerBound)
+}
+
+
 //
 // the service or tester wants to create a Raft server. the ports
 // of all the Raft servers (including this one) are in peers[]. this
@@ -377,17 +393,19 @@ func Make(peers []*labrpc.ClientEnd, me int,
 		// If 1. not receieved heartbeat from leader for a while,
 		//    2. not vote for other candidate.
 		// become a candidate and start leader election.
-		if rf.heartbeatTimeout(ctx) && rf.votedFor == nil {
+		if rf.isHeartbeatTimeout(ctx) && rf.votedFor == nil {
 			// Become a candidate
 			// 1. Increase currentTerm;
 			rf.currentTerm++
 			// 2. Vote for self;
 			rf.votedFor = &me
 			// 3. Reset election timer;
-
+		    electTimeoutDuration := rf.getRandomElectionTimeout()
 			// 4. Send RequestVote RPC to other servers.
 
-			// TODO: Set election random timeout with context
+			// Step 4 with election timeout.
+			tCtx, cancel := context.WithTimeout(ctx, electTimeoutDuration)
+			defer cancel()
 			for i := 0; i < len(rf.peers); i++ {
 				if i == me {
 					continue

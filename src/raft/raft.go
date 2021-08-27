@@ -25,6 +25,8 @@ import (
 	"math/rand"
 
 	"mit6.824/src/labrpc"
+
+	log "github.com/sirupsen/logrus"
 )
 
 // import "bytes"
@@ -393,35 +395,50 @@ func Make(peers []*labrpc.ClientEnd, me int,
 		// If 1. not receieved heartbeat from leader for a while,
 		//    2. not vote for other candidate.
 		// become a candidate and start leader election.
-		if rf.isHeartbeatTimeout(ctx) && rf.votedFor == nil {
+		if rf.isHeartbeatTimeout() && rf.votedFor == nil {
 			// Become a candidate
+			rf.mu.Lock()
 			// 1. Increase currentTerm;
 			rf.currentTerm++
 			// 2. Vote for self;
 			rf.votedFor = &me
+			rf.mu.UnLock()
 			// 3. Reset election timer;
 		    electTimeoutDuration := rf.getRandomElectionTimeout()
 			// 4. Send RequestVote RPC to other servers.
+			//	  4.1 election timeout.
+			//	  4.2 Receive the most of votes from other servers.
+			// No +1 because self vote for self, excceed half
+			successVoteNums = len(peers) / 2
+			go func(ctx context.Context) {
+				for i := 0; i < len(rf.peers); i++ {
+					if i == me {
+						continue
+					}
+					go func() {
+						rf.mu.Lock()
+						args := &RequestVoteArgs{
+							Term: rf.currentTerm,
+							CandidateID: rf.me,
+							LastLogIndex: len(rf.logs) - 1,
+							LastLogTerm: rf.logs[len(rf.logs) - 1].Term,
+						}
+						rf.mu.UnLock()
+						reply := &RequestVoteReply{}
+						rf.sendRequestVote(i, args, reply)
 
-			// Step 4 with election timeout.
-			tCtx, cancel := context.WithTimeout(ctx, electTimeoutDuration)
-			defer cancel()
-			for i := 0; i < len(rf.peers); i++ {
-				if i == me {
-					continue
+						if reply.VoteGranted {
+							electionSuccessWg.Done()
+						}
+						electionDoneWg.Done()
+					}
 				}
-				
-				args := &RequestVoteArgs{
-					Term: rf.currentTerm,
-					CandidateID: rf.me,
-					LastLogIndex: len(rf.logs) - 1,
-					LastLogTerm: rf.logs[len(rf.logs) - 1].Term,
-				}
-				reply := &RequestVoteReply{}
-				go rf.sendRequestVote(i, args, reply)
-				if reply.VoteGranted {
-					
-				}
+			}(ctx)
+			select {
+				case <-ctx.Done():
+					log.Warnf("Request votes timeout")
+				case <-time.After(electionTimeoutDuration):
+					log.Infof("Request votes timeout in %v", electionTimeoutDuration)
 			}
 		}
 	}(ctx)
@@ -430,4 +447,15 @@ func Make(peers []*labrpc.ClientEnd, me int,
 	rf.readPersist(persister.ReadRaftState())
 
 	return rf
+}
+
+func init() {
+	log.SetOutput(os.Stdout)
+	// Only log the warning severity or above.
+	// log.SetLevel(log.DebugLevel)
+	log.SetLevel(log.WarnLevel)
+	log.SetFormatter(&log.TextFormatter{
+		// DisableColors: true,
+		FullTimestamp: true,
+	})
 }

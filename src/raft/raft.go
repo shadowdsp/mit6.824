@@ -92,7 +92,7 @@ type Raft struct {
 	lastHeartbeatTime time.Time
 
 	// electionTimer
-	electionTimer time.Duration
+	electionChan chan struct{}
 }
 
 type LogEntry struct {
@@ -197,6 +197,9 @@ type AppendEntriesReply struct {
 //
 func (rf *Raft) RequestVote(args *RequestVoteArgs, reply *RequestVoteReply) {
 	// Your code here (2A, 2B).
+	rf.mu.Lock()
+	defer rf.mu.Unlock()
+
 	reply.Term = rf.currentTerm
 	reply.VoteGranted = false
 	if args.Term < rf.currentTerm {
@@ -207,6 +210,7 @@ func (rf *Raft) RequestVote(args *RequestVoteArgs, reply *RequestVoteReply) {
 		// Make sure candidate is as up to date as follower
 		if args.lastLogIndex <= len(rf.logs) - 1 && args.LastLogTerm <= rf.logs[len(rf.logs) - 1].Term {
 			reply.VoteGranted = true
+			rf.voteFor = &args.CandidateID
 		}
 	}
 	return
@@ -215,6 +219,19 @@ func (rf *Raft) RequestVote(args *RequestVoteArgs, reply *RequestVoteReply) {
 // AppendEntries AppendEntries RPC handler
 // Invoked by leader to replicate log entries (§5.3); also used as heartbeat
 func (rf *Raft) AppendEntries(args *AppendEntriesArgs, reply *AppendEntriesReply) {
+	// If receive AppendEntries from leader:
+	// 1. The server should become the follower, and stop leader election.
+	// 2. Refresh heartbeat time.
+	rf.mu.Lock()
+	rf.lastHeartbeatTime = time.Now()
+	select {
+	case rf.electionChan<-struct{}{}:
+		log.Info("Insert to electionChan")
+	default:
+		log.Info("Skip to insert to electionChan")
+	}
+	rf.mu.Unlock()
+
 	// TODO: We need a more efficient data-structrue to maintain logs
 	reply.Term = rf.currentTerm
 	reply.Success = true
@@ -363,11 +380,84 @@ func (rf *Raft) killed() bool {
 func (rf *Raft) isHeartbeatTimeout() bool {
 	rf.mu.Lock()
 	defer rf.mu.Unlock()
-	return time.After(lastHeartbeatTime.Add(heartbeatTimeoutLimit))
+	if time.After(lastHeartbeatTime.Add(heartbeatTimeoutLimit)) {
+		rf.electionChan = make(chan struct{}, 1)
+		rf.votedFor = nil
+		return false
+	}
+	return true
 }
 
 func (rf *Raft) getRandomElectionTimeout() time.Duration {
     return time.Millisecond * (rand.Intn(electionTimeoutUpperBound - electionTimeoutLowerBound) + electionTimeoutLowerBound)
+}
+
+
+func (rf *Raft) checkHeartbeatOrElection() {
+	// If 1. not receieved heartbeat from leader for a while,
+	//    2. not vote for other candidate.
+	if !rf.isHeartbeatTimeout() || rf.votedFor != nil {
+		return
+	}
+
+	// Become a candidate and start leader election.
+	rf.mu.Lock()
+	// 1. Increase currentTerm;
+	rf.currentTerm++
+	// 2. Vote for self;
+	rf.votedFor = &me
+	rf.mu.UnLock()
+	// 3. Reset election timer;
+	electTimeoutDuration := rf.getRandomElectionTimeout()
+	// 4. Send RequestVote RPC to other servers.
+	//	  4.1. Election timeout;
+	//	  4.2. Receive the most of votes from other servers;
+	//    4.3. Once received RPC AppendEntry from leader, become follower.
+	// No +1 because self vote for self, excceed half
+	successVoteNums := len(peers) / 2
+	voteNums := 0
+	var voteMux sync.Mutex
+	successChan := make(chan struct{}, 1)
+	go func(ctx context.Context) {
+		for i := 0; i < len(rf.peers); i++ {
+			if i == me {
+				continue
+			}
+			go func() {
+				rf.mu.Lock()
+				args := &RequestVoteArgs{
+					Term: rf.currentTerm,
+					CandidateID: rf.me,
+					LastLogIndex: len(rf.logs) - 1,
+					LastLogTerm: rf.logs[len(rf.logs) - 1].Term,
+				}
+				rf.mu.UnLock()
+				reply := &RequestVoteReply{}
+				rf.sendRequestVote(i, args, reply)
+
+				if reply.VoteGranted {
+					voteMux.Lock()
+					voteNums++
+					if voteNums >= successVoteNums {
+						successChan <-struct{}{}
+					}
+					voteMux.Unlock()
+				}
+			}
+		}
+	}(ctx)
+
+	// ticker := time.NewTicker(500 * time.Millisecond)
+
+	select {
+		case <-successChan:
+			log.Infof("Request votes successfully!")
+		case <-rf.electionChan:
+			// !!! Here will have concurrency issue ?
+			log.Infof("Receive heartbeat from leader")
+		case <-time.After(electionTimeoutDuration):
+			log.Warnf("Request votes timeout in %v", electionTimeoutDuration)
+	}
 }
 
 
@@ -392,53 +482,13 @@ func Make(peers []*labrpc.ClientEnd, me int,
 	ctx := context.Background()
 	// Your initialization code here (2A, 2B, 2C).
 	go func(ctx context.Context) {
-		// If 1. not receieved heartbeat from leader for a while,
-		//    2. not vote for other candidate.
-		// become a candidate and start leader election.
-		if rf.isHeartbeatTimeout() && rf.votedFor == nil {
-			// Become a candidate
-			rf.mu.Lock()
-			// 1. Increase currentTerm;
-			rf.currentTerm++
-			// 2. Vote for self;
-			rf.votedFor = &me
-			rf.mu.UnLock()
-			// 3. Reset election timer;
-		    electTimeoutDuration := rf.getRandomElectionTimeout()
-			// 4. Send RequestVote RPC to other servers.
-			//	  4.1 election timeout.
-			//	  4.2 Receive the most of votes from other servers.
-			// No +1 because self vote for self, excceed half
-			successVoteNums = len(peers) / 2
-			go func(ctx context.Context) {
-				for i := 0; i < len(rf.peers); i++ {
-					if i == me {
-						continue
-					}
-					go func() {
-						rf.mu.Lock()
-						args := &RequestVoteArgs{
-							Term: rf.currentTerm,
-							CandidateID: rf.me,
-							LastLogIndex: len(rf.logs) - 1,
-							LastLogTerm: rf.logs[len(rf.logs) - 1].Term,
-						}
-						rf.mu.UnLock()
-						reply := &RequestVoteReply{}
-						rf.sendRequestVote(i, args, reply)
-
-						if reply.VoteGranted {
-							electionSuccessWg.Done()
-						}
-						electionDoneWg.Done()
-					}
-				}
-			}(ctx)
+		electionTicker := time.NewTicker(heartbeatTimeoutLimit * 0.5)
+		for {
 			select {
-				case <-ctx.Done():
-					log.Warnf("Request votes timeout")
-				case <-time.After(electionTimeoutDuration):
-					log.Infof("Request votes timeout in %v", electionTimeoutDuration)
+			case <-ticker.C:
+				rf.checkHeartbeatOrElection()
+			case <-ctx.Done():
+				log.Infof("context done !")
 			}
 		}
 	}(ctx)

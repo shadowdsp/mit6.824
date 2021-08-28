@@ -510,9 +510,7 @@ func (rf *Raft) checkHeartbeatTimeoutOrElection(ctx context.Context) {
 }
 
 func (rf *Raft) sendHeartbeat(ctx context.Context) {
-	rf.mu.Lock()
 	_, isleader := rf.GetState()
-	rf.mu.Unlock()
 	if isleader {
 		wg := sync.WaitGroup{}
 		wg.Add(len(rf.peers) - 1)

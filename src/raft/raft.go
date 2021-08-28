@@ -51,9 +51,18 @@ type ApplyMsg struct {
 
 const (
 	heartbeatTimeoutLimit = 1 * time.Second
-	electionTimeoutLowerBound = 150
-	electionTimeoutUpperBound = 300
+	electionTimeoutLowerBound = 300
+	electionTimeoutUpperBound = 500
 )
+
+type State string
+
+var (
+	Leader = State("Leader")
+	Candidate = State("Candidate")
+	Follower = State("Follower")
+)
+
 
 //
 // A Go object implementing a single Raft peer.
@@ -70,7 +79,7 @@ type Raft struct {
 	// state a Raft server must maintain.
 
 	// 1 follower, 2 candidate, 3 leader
-	role string
+	state string
 
 	// Persistent state on server
 	currentTerm int
@@ -108,10 +117,15 @@ func (le *LogEntry) isSame(new *LogEntry) bool {
 // return currentTerm and whether this server
 // believes it is the leader.
 func (rf *Raft) GetState() (int, bool) {
-
 	var term int
 	var isleader bool
 	// Your code here (2A).
+	rf.mu.Lock()
+	term = rf.currentTerm
+	if rf.state == Leader {
+		isleader = true
+	}
+	rf.mu.Unlock()
 	return term, isleader
 }
 
@@ -200,15 +214,18 @@ func (rf *Raft) RequestVote(args *RequestVoteArgs, reply *RequestVoteReply) {
 	rf.mu.Lock()
 	defer rf.mu.Unlock()
 
-	reply.Term = rf.currentTerm
 	reply.VoteGranted = false
+	reply.Term = rf.currentTerm
 	if args.Term < rf.currentTerm {
 		return
+	} else if args.Term > rf.currentTerm {
+		rf.state = Follower
 	}
+	rf.currentTerm, reply.Term = args.Term, args.Term
 
 	if rf.votedFor == nil || *rf.votedFor == args.CandidateID {
 		// Make sure candidate is as up to date as follower
-		if args.lastLogIndex <= len(rf.logs) - 1 && args.LastLogTerm <= rf.logs[len(rf.logs) - 1].Term {
+		if args.lastLogIndex <= len(rf.logs) && args.LastLogTerm <= rf.logs[len(rf.logs) - 1].Term {
 			reply.VoteGranted = true
 			rf.voteFor = &args.CandidateID
 		}
@@ -223,74 +240,75 @@ func (rf *Raft) AppendEntries(args *AppendEntriesArgs, reply *AppendEntriesReply
 	// 1. The server should become the follower, and stop leader election.
 	// 2. Refresh heartbeat time.
 	rf.mu.Lock()
-	rf.lastHeartbeatTime = time.Now()
-	select {
-	case rf.electionChan<-struct{}{}:
-		log.Info("Insert to electionChan")
-	default:
-		log.Info("Skip to insert to electionChan")
+	if args.Term >= rf.currentTerm && rf.state == Candidate {
+		rf.state = Follower
 	}
+	if args.Term > rf.currentTerm {
+		rf.currentTerm = args.Term
+		rf.state = Follower
+	}
+	rf.lastHeartbeatTime = time.Now()
 	rf.mu.Unlock()
 
-	// TODO: We need a more efficient data-structrue to maintain logs
-	reply.Term = rf.currentTerm
-	reply.Success = true
+	// // TODO: We need a more efficient data-structrue to maintain logs
+	// reply.Term = rf.currentTerm
+	// reply.Success = true
 
-	// Rule 1: Reply false if term < currentTerm
-	if args.Term < rf.currentTerm {
-		reply.Success = false
-		return
-	}
+	// // Rule 1: Reply false if term < currentTerm
+	// if args.Term < rf.currentTerm {
+	// 	reply.Success = false
+	// 	return
+	// }
 
-	// Rule 2: Reply false if log doesn’t contain an entry at prevLogIndex
-	// whose term matches prevLogTerm
-	exist := false
-	for _, entry := range rf.logs {
-		if entry.Term == args.PrevLogTerm && entry.Index == args.PrevLogIndex {
-			exist = true
-		}
-	}
-	if !exist {
-		reply.Success = false
-		return
-	}
+	// // Rule 2: Reply false if log doesn’t contain an entry at prevLogIndex
+	// // whose term matches prevLogTerm
+	// exist := false
+	// for _, entry := range rf.logs {
+	// 	if entry.Term == args.PrevLogTerm && entry.Index == args.PrevLogIndex {
+	// 		exist = true
+	// 	}
+	// }
+	// if !exist {
+	// 	reply.Success = false
+	// 	return
+	// }
 
-	// Rule 3: If an existing entry conflicts with a new one (same index but different terms),
-	// delete the existing entry and all that follow it
-	deleteIndex := -1
-	for i, entry := range rf.logs {
-		for _, nEntry := range args.Logs {
-			if entry.Index == nEntry.Index && entry.Term != nEntry.Term {
-				deleteIndex = i
-				break
-			}
-		}
-		if deleteIndex != -1 {
-			break
-		}
-	}
-	if deleteIndex != -1 {
-		rf.logs = rf.logs[:deleteIndex]
-	}
+	// // Rule 3: If an existing entry conflicts with a new one (same index but different terms),
+	// // delete the existing entry and all that follow it
+	// deleteIndex := -1
+	// for i, entry := range rf.logs {
+	// 	for _, nEntry := range args.Logs {
+	// 		if entry.Index == nEntry.Index && entry.Term != nEntry.Term {
+	// 			deleteIndex = i
+	// 			break
+	// 		}
+	// 	}
+	// 	if deleteIndex != -1 {
+	// 		break
+	// 	}
+	// }
+	// if deleteIndex != -1 {
+	// 	rf.logs = rf.logs[:deleteIndex]
+	// }
 
-	// Rule 4: Append any new entries not already in the log
-	for _, nEntry := args.Logs {
-		exist := false
-		for _, entry := range rf.logs {
-			if nEntry.isSame(entry) {
-				exist = true
-			}
-		}
-		if !exist {
-			rf.logs = append(rf.logs, nEntry)
-		}
-	}
+	// // Rule 4: Append any new entries not already in the log
+	// for _, nEntry := args.Logs {
+	// 	exist := false
+	// 	for _, entry := range rf.logs {
+	// 		if nEntry.isSame(entry) {
+	// 			exist = true
+	// 		}
+	// 	}
+	// 	if !exist {
+	// 		rf.logs = append(rf.logs, nEntry)
+	// 	}
+	// }
 
-	// Rule 5: If leaderCommit > commitIndex, set commitIndex = min(leaderCommit, index of last new entry)
-	if args.LeaderCommit > rf.commitIndex {
-		rf.commitIndex = min(args.Leadercommit, rf.logs[len(rf.logs) - 1].Index)
-	}
-	return
+	// // Rule 5: If leaderCommit > commitIndex, set commitIndex = min(leaderCommit, index of last new entry)
+	// if args.LeaderCommit > rf.commitIndex {
+	// 	rf.commitIndex = min(args.Leadercommit, rf.logs[len(rf.logs) - 1].Index)
+	// }
+	// return
 }
 
 //
@@ -378,8 +396,6 @@ func (rf *Raft) killed() bool {
 
 // Customized functions
 func (rf *Raft) isHeartbeatTimeout() bool {
-	rf.mu.Lock()
-	defer rf.mu.Unlock()
 	if time.After(lastHeartbeatTime.Add(heartbeatTimeoutLimit)) {
 		rf.electionChan = make(chan struct{}, 1)
 		rf.votedFor = nil
@@ -392,21 +408,36 @@ func (rf *Raft) getRandomElectionTimeout() time.Duration {
     return time.Millisecond * (rand.Intn(electionTimeoutUpperBound - electionTimeoutLowerBound) + electionTimeoutLowerBound)
 }
 
+func (rf *Raft) checkHeartbeatTimeout(ctx context.Context) {
+	rf.mu.Lock()
+	defer rf.mu.Unlock()
 
-func (rf *Raft) checkHeartbeatOrElection() {
+}
+
+
+func (rf *Raft) checkHeartbeatTimeoutOrElection(ctx context.Context) {
 	// If 1. not receieved heartbeat from leader for a while,
 	//    2. not vote for other candidate.
-	if !rf.isHeartbeatTimeout() || rf.votedFor != nil {
+	// Become a candidate.
+	rf.mu.Lock()
+	if rf.state == Follower && rf.isHeartbeatTimeout(ctx) && rf.votedFor == nil {
+		rf.state = Candidate
+	}
+	// Here can resolve the case that leader has sent AppendEntries
+	isCandidate := rf.state == Candidate
+	rf.mu.UnLock()
+	if !isCandidate {
 		return
 	}
 
-	// Become a candidate and start leader election.
+	// Candidate start leader election.
 	rf.mu.Lock()
 	// 1. Increase currentTerm;
 	rf.currentTerm++
 	// 2. Vote for self;
 	rf.votedFor = &me
 	rf.mu.UnLock()
+
 	// 3. Reset election timer;
 	electTimeoutDuration := rf.getRandomElectionTimeout()
 	// 4. Send RequestVote RPC to other servers.
@@ -416,14 +447,12 @@ func (rf *Raft) checkHeartbeatOrElection() {
 	// No +1 because self vote for self, excceed half
 	successVoteNums := len(peers) / 2
 	voteNums := 0
-	var voteMux sync.Mutex
-	successChan := make(chan struct{}, 1)
 	go func(ctx context.Context) {
-		for i := 0; i < len(rf.peers); i++ {
+		for i := range rf.peers {
 			if i == me {
 				continue
 			}
-			go func() {
+			go func(serverID int) {
 				rf.mu.Lock()
 				args := &RequestVoteArgs{
 					Term: rf.currentTerm,
@@ -433,30 +462,81 @@ func (rf *Raft) checkHeartbeatOrElection() {
 				}
 				rf.mu.UnLock()
 				reply := &RequestVoteReply{}
-				rf.sendRequestVote(i, args, reply)
+				rf.sendRequestVote(serverID, args, reply)
 
 				if reply.VoteGranted {
-					voteMux.Lock()
+					rf.mu.Lock()
 					voteNums++
-					if voteNums >= successVoteNums {
-						successChan <-struct{}{}
-					}
-					voteMux.Unlock()
+					rf.mu.Unlock()
 				}
-			}
+			}(i)
 		}
 	}(ctx)
 
-	// ticker := time.NewTicker(500 * time.Millisecond)
+	electionSuccess := false
+	for {
+		time.Sleep(10 * time.Millisecond)
 
-	select {
-		case <-successChan:
-			log.Infof("Request votes successfully!")
-		case <-rf.electionChan:
-			// !!! Here will have concurrency issue ?
-			log.Infof("Receive heartbeat from leader")
-		case <-time.After(electionTimeoutDuration):
-			log.Warnf("Request votes timeout in %v", electionTimeoutDuration)
+		isFinished := false
+		rf.mu.Lock()
+		if voteNums >= successVoteNums {
+			// If election is successful
+			rf.state = Leader
+			electionSuccess = true
+			isFinished = true
+		}
+
+		if rf.state != Candidate {
+			// If receive Heartbeat from leader
+			rf.state = Follower
+			isFinished = true
+		}
+		rf.mu.Unlock()
+
+		if time.Now().After(electTimeoutDuration) {
+			isFinished = true
+		}
+
+		if isFinished {
+			break
+		}
+	}
+
+	if electionSuccess {
+		// TODO: Use concurrency strategy and
+		// move it to another goroutine in other method is better.
+		rf.sendHeartbeat()
+	}
+}
+
+func (rf *Raft) sendHeartbeat(ctx context.Context) {
+	rf.mu.Lock()
+	term, isleader = rf.GetState()
+	rf.mu.Unlock()
+	if isleader {
+		wg := sync.WaitGroup{}
+		wg.Add(len(rf.peers) - 1)
+		for i := range rf.peers {
+			if i == rf.me {
+				continue
+			}
+			go func(serverID int) {
+				defer wg.Done()
+				rf.mu.Lock()
+				args := &AppendEntriesArgs{
+					Term: rf.currentTerm,
+					LeaderID: me,
+					PrevLogTerm: 1,
+					PrevLogIndex: 1,
+					Logs: nil,
+					LeaderCommit: 1,
+				}
+				rf.mu.Unlock()
+				reply := &AppendEntriesReply{}
+				rf.sendAppendEntries(serverID, args, reply)
+			}(i)
+		}
+		wg.Wait()
 	}
 }
 
@@ -478,20 +558,35 @@ func Make(peers []*labrpc.ClientEnd, me int,
 	rf.peers = peers
 	rf.persister = persister
 	rf.me = me
+	rf.logs = make([]*LogEntry, 0)
 
 	ctx := context.Background()
 	// Your initialization code here (2A, 2B, 2C).
 	go func(ctx context.Context) {
+		// check heartbeat timeout or election
 		electionTicker := time.NewTicker(heartbeatTimeoutLimit * 0.5)
 		for {
+			// Every 0.5 * heartbeatTimeoutLimit checkHeartbeatTimeoutOrElection
 			select {
-			case <-ticker.C:
-				rf.checkHeartbeatOrElection()
+			case <-electionTicker.C:
+				rf.checkHeartbeatTimeoutOrElection(ctx)
 			case <-ctx.Done():
-				log.Infof("context done !")
+				log.Warnf("Election context done !")
 			}
 		}
 	}(ctx)
+
+	go func(ctx context.Context) {
+		heartbeatTicker := time.NewTicker(heartbeatTimeoutLimit * 0.2)
+		for {
+			select {
+			case <-heartbeatTicker.C:
+				rf.sendHeartbeat(ctx)
+			case <-ctx.Done():
+				log.Warnf("Heartbeat context done !")
+			}
+		}
+	}
 
 	// initialize from state persisted before a crash
 	rf.readPersist(persister.ReadRaftState())

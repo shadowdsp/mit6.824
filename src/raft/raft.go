@@ -19,10 +19,11 @@ package raft
 
 import (
 	"context"
+	"math/rand"
+	"os"
 	"sync"
 	"sync/atomic"
 	"time"
-	"math/rand"
 
 	"mit6.824/src/labrpc"
 
@@ -50,7 +51,9 @@ type ApplyMsg struct {
 }
 
 const (
-	heartbeatTimeoutLimit = 1 * time.Second
+	heartbeatTimeoutLimit     = 1 * time.Second
+	heartbeatInterval         = 200 * time.Millisecond
+	electionInterval          = 500 * time.Millisecond
 	electionTimeoutLowerBound = 300
 	electionTimeoutUpperBound = 500
 )
@@ -58,11 +61,10 @@ const (
 type State string
 
 var (
-	Leader = State("Leader")
+	Leader    = State("Leader")
 	Candidate = State("Candidate")
-	Follower = State("Follower")
+	Follower  = State("Follower")
 )
-
 
 //
 // A Go object implementing a single Raft peer.
@@ -79,7 +81,7 @@ type Raft struct {
 	// state a Raft server must maintain.
 
 	// 1 follower, 2 candidate, 3 leader
-	state string
+	state State
 
 	// Persistent state on server
 	currentTerm int
@@ -94,7 +96,7 @@ type Raft struct {
 	receivedVote map[int]bool
 
 	// Volatile state on leader
-	nextIndex []int
+	nextIndex  []int
 	matchIndex []int
 
 	// the last heartbeat time received from leader
@@ -225,9 +227,9 @@ func (rf *Raft) RequestVote(args *RequestVoteArgs, reply *RequestVoteReply) {
 
 	if rf.votedFor == nil || *rf.votedFor == args.CandidateID {
 		// Make sure candidate is as up to date as follower
-		if args.lastLogIndex <= len(rf.logs) && args.LastLogTerm <= rf.logs[len(rf.logs) - 1].Term {
+		if len(rf.logs) <= 0 || (args.LastLogIndex <= len(rf.logs)-1 && args.LastLogTerm <= rf.logs[len(rf.logs)-1].Term) {
 			reply.VoteGranted = true
-			rf.voteFor = &args.CandidateID
+			rf.votedFor = &args.CandidateID
 		}
 	}
 	return
@@ -395,17 +397,16 @@ func (rf *Raft) killed() bool {
 }
 
 // Customized functions
-func (rf *Raft) isHeartbeatTimeout() bool {
-	if time.After(lastHeartbeatTime.Add(heartbeatTimeoutLimit)) {
-		rf.electionChan = make(chan struct{}, 1)
+func (rf *Raft) isHeartbeatTimeout(ctx context.Context) bool {
+	if time.Now().After(rf.lastHeartbeatTime.Add(heartbeatTimeoutLimit)) {
 		rf.votedFor = nil
 		return false
 	}
 	return true
 }
 
-func (rf *Raft) getRandomElectionTimeout() time.Duration {
-    return time.Millisecond * (rand.Intn(electionTimeoutUpperBound - electionTimeoutLowerBound) + electionTimeoutLowerBound)
+func (rf *Raft) getRandomElectionTimeout() time.Time {
+	return time.Now().Add(time.Millisecond * time.Duration(rand.Intn(electionTimeoutUpperBound-electionTimeoutLowerBound)+electionTimeoutLowerBound))
 }
 
 func (rf *Raft) checkHeartbeatTimeout(ctx context.Context) {
@@ -413,7 +414,6 @@ func (rf *Raft) checkHeartbeatTimeout(ctx context.Context) {
 	defer rf.mu.Unlock()
 
 }
-
 
 func (rf *Raft) checkHeartbeatTimeoutOrElection(ctx context.Context) {
 	// If 1. not receieved heartbeat from leader for a while,
@@ -425,7 +425,7 @@ func (rf *Raft) checkHeartbeatTimeoutOrElection(ctx context.Context) {
 	}
 	// Here can resolve the case that leader has sent AppendEntries
 	isCandidate := rf.state == Candidate
-	rf.mu.UnLock()
+	rf.mu.Unlock()
 	if !isCandidate {
 		return
 	}
@@ -435,8 +435,8 @@ func (rf *Raft) checkHeartbeatTimeoutOrElection(ctx context.Context) {
 	// 1. Increase currentTerm;
 	rf.currentTerm++
 	// 2. Vote for self;
-	rf.votedFor = &me
-	rf.mu.UnLock()
+	rf.votedFor = &rf.me
+	rf.mu.Unlock()
 
 	// 3. Reset election timer;
 	electTimeoutDuration := rf.getRandomElectionTimeout()
@@ -445,22 +445,22 @@ func (rf *Raft) checkHeartbeatTimeoutOrElection(ctx context.Context) {
 	//	  4.2. Receive the most of votes from other servers;
 	//    4.3. Once received RPC AppendEntry from leader, become follower.
 	// No +1 because self vote for self, excceed half
-	successVoteNums := len(peers) / 2
+	successVoteNums := len(rf.peers) / 2
 	voteNums := 0
 	go func(ctx context.Context) {
 		for i := range rf.peers {
-			if i == me {
+			if i == rf.me {
 				continue
 			}
 			go func(serverID int) {
 				rf.mu.Lock()
 				args := &RequestVoteArgs{
-					Term: rf.currentTerm,
-					CandidateID: rf.me,
+					Term:         rf.currentTerm,
+					CandidateID:  rf.me,
 					LastLogIndex: len(rf.logs) - 1,
-					LastLogTerm: rf.logs[len(rf.logs) - 1].Term,
+					LastLogTerm:  rf.logs[len(rf.logs)-1].Term,
 				}
-				rf.mu.UnLock()
+				rf.mu.Unlock()
 				reply := &RequestVoteReply{}
 				rf.sendRequestVote(serverID, args, reply)
 
@@ -505,13 +505,13 @@ func (rf *Raft) checkHeartbeatTimeoutOrElection(ctx context.Context) {
 	if electionSuccess {
 		// TODO: Use concurrency strategy and
 		// move it to another goroutine in other method is better.
-		rf.sendHeartbeat()
+		rf.sendHeartbeat(ctx)
 	}
 }
 
 func (rf *Raft) sendHeartbeat(ctx context.Context) {
 	rf.mu.Lock()
-	term, isleader = rf.GetState()
+	_, isleader := rf.GetState()
 	rf.mu.Unlock()
 	if isleader {
 		wg := sync.WaitGroup{}
@@ -524,11 +524,11 @@ func (rf *Raft) sendHeartbeat(ctx context.Context) {
 				defer wg.Done()
 				rf.mu.Lock()
 				args := &AppendEntriesArgs{
-					Term: rf.currentTerm,
-					LeaderID: me,
-					PrevLogTerm: 1,
+					Term:         rf.currentTerm,
+					LeaderID:     rf.me,
+					PrevLogTerm:  1,
 					PrevLogIndex: 1,
-					Logs: nil,
+					Logs:         nil,
 					LeaderCommit: 1,
 				}
 				rf.mu.Unlock()
@@ -539,7 +539,6 @@ func (rf *Raft) sendHeartbeat(ctx context.Context) {
 		wg.Wait()
 	}
 }
-
 
 //
 // the service or tester wants to create a Raft server. the ports
@@ -564,7 +563,7 @@ func Make(peers []*labrpc.ClientEnd, me int,
 	// Your initialization code here (2A, 2B, 2C).
 	go func(ctx context.Context) {
 		// check heartbeat timeout or election
-		electionTicker := time.NewTicker(heartbeatTimeoutLimit * 0.5)
+		electionTicker := time.NewTicker(electionInterval)
 		for {
 			// Every 0.5 * heartbeatTimeoutLimit checkHeartbeatTimeoutOrElection
 			select {
@@ -577,8 +576,9 @@ func Make(peers []*labrpc.ClientEnd, me int,
 	}(ctx)
 
 	go func(ctx context.Context) {
-		heartbeatTicker := time.NewTicker(heartbeatTimeoutLimit * 0.2)
+		heartbeatTicker := time.NewTicker(heartbeatInterval)
 		for {
+			// Every 0.5 * heartbeatTimeoutLimit checkHeartbeatTimeoutOrElection
 			select {
 			case <-heartbeatTicker.C:
 				rf.sendHeartbeat(ctx)
@@ -586,7 +586,7 @@ func Make(peers []*labrpc.ClientEnd, me int,
 				log.Warnf("Heartbeat context done !")
 			}
 		}
-	}
+	}(ctx)
 
 	// initialize from state persisted before a crash
 	rf.readPersist(persister.ReadRaftState())

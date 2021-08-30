@@ -120,9 +120,7 @@ func (rf *Raft) GetState() (int, bool) {
 	// Your code here (2A).
 	rf.mu.Lock()
 	term = rf.currentTerm
-	if rf.state == Leader {
-		isleader = true
-	}
+	isleader = (rf.state == Leader)
 	rf.mu.Unlock()
 	return term, isleader
 }
@@ -206,6 +204,15 @@ type AppendEntriesReply struct {
 	Success bool
 }
 
+func (rf *Raft) checkTermOrUpdateState(term int) {
+	if term > rf.currentTerm {
+		rf.state = Follower
+		rf.currentTerm = term
+		// need this ?
+		rf.votedFor = nil
+	}
+}
+
 //
 // example RequestVote RPC handler.
 //
@@ -222,10 +229,11 @@ func (rf *Raft) RequestVote(args *RequestVoteArgs, reply *RequestVoteReply) {
 	if args.Term < rf.currentTerm {
 		return
 	} else if args.Term > rf.currentTerm {
-		rf.state = Follower
-		rf.votedFor = nil
+		// rf.state = Follower
+		// rf.votedFor = nil
 	}
-	rf.currentTerm, reply.Term = args.Term, args.Term
+	rf.checkTermOrUpdateState(args.Term)
+	reply.Term = rf.currentTerm
 	log.Debugf("[RequestVote] Log2 Server %v state: %v, currentTerm: %v, voteFor: %v, log size: %v,  args: %+v,", rf.me, rf.state, rf.currentTerm, rf.votedFor, len(rf.logs), args)
 
 	if rf.votedFor == nil || *rf.votedFor == args.CandidateID {
@@ -250,13 +258,18 @@ func (rf *Raft) AppendEntries(args *AppendEntriesArgs, reply *AppendEntriesReply
 
 	log.Debugf("[AppendEntries] Before: Server %v state: %v, currentTerm: %v, log size: %v,  args: %+v, lastHeartbeat: %v", rf.me, rf.state, rf.currentTerm, len(rf.logs), args, rf.lastHeartbeatTime)
 
+	if args.Term < rf.currentTerm {
+		// Important!!!
+		return
+	}
 	if args.Term >= rf.currentTerm && rf.state == Candidate {
 		rf.state = Follower
 	}
-	if args.Term > rf.currentTerm {
-		rf.currentTerm = args.Term
-		rf.state = Follower
-	}
+	rf.checkTermOrUpdateState(args.Term)
+	// if args.Term > rf.currentTerm {
+	// 	rf.currentTerm = args.Term
+	// 	rf.state = Follower
+	// }
 	rf.lastHeartbeatTime = time.Now()
 	log.Debugf("[AppendEntries] After: Server %v state: %v, currentTerm: %v, log size: %v,  args: %+v, lastHeartbeat: %v", rf.me, rf.state, rf.currentTerm, len(rf.logs), args, rf.lastHeartbeatTime)
 	return
@@ -353,11 +366,18 @@ func (rf *Raft) AppendEntries(args *AppendEntriesArgs, reply *AppendEntriesReply
 //
 func (rf *Raft) sendRequestVote(server int, args *RequestVoteArgs, reply *RequestVoteReply) bool {
 	ok := rf.peers[server].Call("Raft.RequestVote", args, reply)
+	rf.mu.Lock()
+	rf.checkTermOrUpdateState(reply.Term)
+	rf.mu.Unlock()
 	return ok
 }
 
 func (rf *Raft) sendAppendEntries(server int, args *AppendEntriesArgs, reply *AppendEntriesReply) bool {
-	return rf.peers[server].Call("Raft.AppendEntries", args, reply)
+	ok := rf.peers[server].Call("Raft.AppendEntries", args, reply)
+	rf.mu.Lock()
+	rf.checkTermOrUpdateState(reply.Term)
+	rf.mu.Unlock()
+	return ok
 }
 
 //
@@ -408,7 +428,7 @@ func (rf *Raft) killed() bool {
 // Customized functions
 func (rf *Raft) isHeartbeatTimeout(ctx context.Context) bool {
 	if time.Now().After(rf.lastHeartbeatTime.Add(heartbeatTimeoutLimit)) {
-		log.Debugf("Server %v is HeartbeatTimeout, state %v, term %v", rf.me, rf.state, rf.currentTerm)
+		log.Debugf("Server %v is HeartbeatTimeout, state %v, term %v, votedFor %+v", rf.me, rf.state, rf.currentTerm, rf.votedFor)
 		return true
 	}
 	return false
@@ -431,7 +451,7 @@ func (rf *Raft) checkHeartbeatTimeoutOrElection(ctx context.Context) {
 	//    2. not vote for other candidate.
 	// Become a candidate.
 	rf.mu.Lock()
-	log.Debugf("[checkHeartbeatTimeoutOrElection] Server %v start, state: %v, term: %v", rf.me, rf.state, rf.currentTerm)
+	log.Debugf("[checkHeartbeatTimeoutOrElection] Server %v start, state: %v, term: %v, votedFor: %v", rf.me, rf.state, rf.currentTerm, rf.votedFor)
 	if rf.state == Follower && rf.isHeartbeatTimeout(ctx) && rf.votedFor == nil {
 		rf.state = Candidate
 	}

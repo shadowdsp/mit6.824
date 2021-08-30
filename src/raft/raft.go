@@ -85,8 +85,9 @@ type Raft struct {
 
 	// Persistent state on server
 	currentTerm int
-	votedFor    *int
-	logs        []*LogEntry
+	// votedFor initial state is -1
+	votedFor int
+	logs     []*LogEntry
 
 	// Volatile state on server
 	commitIndex int
@@ -209,7 +210,7 @@ func (rf *Raft) checkTermOrUpdateState(term int) {
 		rf.state = Follower
 		rf.currentTerm = term
 		// need this ?
-		rf.votedFor = nil
+		rf.votedFor = -1
 	}
 }
 
@@ -228,20 +229,17 @@ func (rf *Raft) RequestVote(args *RequestVoteArgs, reply *RequestVoteReply) {
 	reply.Term = rf.currentTerm
 	if args.Term < rf.currentTerm {
 		return
-	} else if args.Term > rf.currentTerm {
-		// rf.state = Follower
-		// rf.votedFor = nil
 	}
 	rf.checkTermOrUpdateState(args.Term)
 	reply.Term = rf.currentTerm
 	log.Debugf("[RequestVote] Log2 Server %v state: %v, currentTerm: %v, voteFor: %v, log size: %v,  args: %+v,", rf.me, rf.state, rf.currentTerm, rf.votedFor, len(rf.logs), args)
 
-	if rf.votedFor == nil || *rf.votedFor == args.CandidateID {
+	if rf.votedFor == -1 || rf.votedFor == args.CandidateID {
 		// Make sure candidate is as up to date as follower
 		log.Debugf("[RequestVote] Server %v log size: %v", rf.me, len(rf.logs))
 		if len(rf.logs) <= 0 || (args.LastLogIndex <= len(rf.logs)-1 && args.LastLogTerm <= rf.logs[len(rf.logs)-1].Term) {
 			reply.VoteGranted = true
-			rf.votedFor = &args.CandidateID
+			rf.votedFor = args.CandidateID
 		}
 	}
 	return
@@ -258,6 +256,8 @@ func (rf *Raft) AppendEntries(args *AppendEntriesArgs, reply *AppendEntriesReply
 
 	log.Debugf("[AppendEntries] Before: Server %v state: %v, currentTerm: %v, log size: %v,  args: %+v, lastHeartbeat: %v", rf.me, rf.state, rf.currentTerm, len(rf.logs), args, rf.lastHeartbeatTime)
 
+	reply.Term = rf.currentTerm
+	reply.Success = true
 	if args.Term < rf.currentTerm {
 		// Important!!!
 		return
@@ -266,10 +266,7 @@ func (rf *Raft) AppendEntries(args *AppendEntriesArgs, reply *AppendEntriesReply
 		rf.state = Follower
 	}
 	rf.checkTermOrUpdateState(args.Term)
-	// if args.Term > rf.currentTerm {
-	// 	rf.currentTerm = args.Term
-	// 	rf.state = Follower
-	// }
+	reply.Term = rf.currentTerm
 	rf.lastHeartbeatTime = time.Now()
 	log.Debugf("[AppendEntries] After: Server %v state: %v, currentTerm: %v, log size: %v,  args: %+v, lastHeartbeat: %v", rf.me, rf.state, rf.currentTerm, len(rf.logs), args, rf.lastHeartbeatTime)
 	return
@@ -428,6 +425,7 @@ func (rf *Raft) killed() bool {
 // Customized functions
 func (rf *Raft) isHeartbeatTimeout(ctx context.Context) bool {
 	if time.Now().After(rf.lastHeartbeatTime.Add(heartbeatTimeoutLimit)) {
+		// rf.votedFor = -1
 		log.Debugf("Server %v is HeartbeatTimeout, state %v, term %v, votedFor %+v", rf.me, rf.state, rf.currentTerm, rf.votedFor)
 		return true
 	}
@@ -438,12 +436,6 @@ func (rf *Raft) getRandomElectionTimeout() time.Time {
 	return time.Now().Add(time.Millisecond * time.Duration(rand.Intn(electionTimeoutUpperBound-electionTimeoutLowerBound)+electionTimeoutLowerBound))
 }
 
-func (rf *Raft) checkHeartbeatTimeout(ctx context.Context) {
-	rf.mu.Lock()
-	defer rf.mu.Unlock()
-
-}
-
 func (rf *Raft) checkHeartbeatTimeoutOrElection(ctx context.Context) {
 	defer log.Debugf("[checkHeartbeatTimeoutOrElection] Server %v finished", rf.me)
 
@@ -452,9 +444,12 @@ func (rf *Raft) checkHeartbeatTimeoutOrElection(ctx context.Context) {
 	// Become a candidate.
 	rf.mu.Lock()
 	log.Debugf("[checkHeartbeatTimeoutOrElection] Server %v start, state: %v, term: %v, votedFor: %v", rf.me, rf.state, rf.currentTerm, rf.votedFor)
-	if rf.state == Follower && rf.isHeartbeatTimeout(ctx) && rf.votedFor == nil {
+	if rf.state == Follower && rf.isHeartbeatTimeout(ctx) && rf.votedFor == -1 {
 		rf.state = Candidate
 	}
+	// if rf.state == Follower && (rf.isHeartbeatTimeout(ctx) || rf.votedFor == -1) {
+	// 	rf.state = Candidate
+	// }
 	// Here can resolve the case that leader has sent AppendEntries
 	if rf.state != Candidate {
 		rf.mu.Unlock()
@@ -465,7 +460,7 @@ func (rf *Raft) checkHeartbeatTimeoutOrElection(ctx context.Context) {
 	// 1. Increase currentTerm;
 	rf.currentTerm++
 	// 2. Vote for self;
-	rf.votedFor = &rf.me
+	rf.votedFor = rf.me
 
 	log.Debugf("[checkHeartbeatTimeoutOrElection] Server %v start election, state: %v, term: %v", rf.me, rf.state, rf.currentTerm)
 	rf.mu.Unlock()
@@ -528,7 +523,7 @@ func (rf *Raft) checkHeartbeatTimeoutOrElection(ctx context.Context) {
 		} else if time.Now().After(electTimeoutDuration) {
 			log.Infof("[checkHeartbeatTimeoutOrElection] Server %v election timeout in term %v", rf.me, rf.currentTerm)
 			rf.state = Follower
-			rf.votedFor = nil
+			rf.votedFor = -1
 			isFinished = true
 		}
 		rf.mu.Unlock()
@@ -593,6 +588,7 @@ func Make(peers []*labrpc.ClientEnd, me int,
 	rf.me = me
 	rf.logs = make([]*LogEntry, 0)
 	rf.state = Follower
+	rf.votedFor = -1
 
 	ctx := context.Background()
 	// Your initialization code here (2A, 2B, 2C).

@@ -86,7 +86,7 @@ type Raft struct {
 	// Persistent state on server
 	currentTerm int
 	// votedFor initial state is -1
-	votedFor []int
+	votedFor int
 	logs     []*LogEntry
 
 	// Volatile state on server
@@ -236,7 +236,6 @@ func (rf *Raft) RequestVote(args *RequestVoteArgs, reply *RequestVoteReply) {
 
 	if rf.votedFor == -1 || rf.votedFor == args.CandidateID {
 		// Make sure candidate is as up to date as follower
-		log.Debugf("[RequestVote] Server %v log size: %v", rf.me, len(rf.logs))
 		if len(rf.logs) <= 0 || (args.LastLogIndex <= len(rf.logs)-1 && args.LastLogTerm <= rf.logs[len(rf.logs)-1].Term) {
 			reply.VoteGranted = true
 			rf.votedFor = args.CandidateID
@@ -270,7 +269,6 @@ func (rf *Raft) AppendEntries(args *AppendEntriesArgs, reply *AppendEntriesReply
 	rf.checkTermOrUpdateState(args.Term)
 	reply.Term = rf.currentTerm
 	rf.lastHeartbeatTime = time.Now()
-	// rf.votedFor = -1
 	log.Debugf("[AppendEntries] After: Server %v state: %v, currentTerm: %v, log size: %v,  args: %+v, lastHeartbeat: %v", rf.me, rf.state, rf.currentTerm, len(rf.logs), args, rf.lastHeartbeatTime)
 	return
 
@@ -428,7 +426,6 @@ func (rf *Raft) killed() bool {
 // Customized functions
 func (rf *Raft) isHeartbeatTimeout(ctx context.Context) bool {
 	if time.Now().After(rf.lastHeartbeatTime.Add(heartbeatTimeoutLimit)) {
-		// rf.votedFor = -1
 		log.Debugf("Server %v is HeartbeatTimeout, state %v, term %v, votedFor %+v", rf.me, rf.state, rf.currentTerm, rf.votedFor)
 		return true
 	}
@@ -447,12 +444,10 @@ func (rf *Raft) checkHeartbeatTimeoutOrElection(ctx context.Context) {
 	// Become a candidate.
 	rf.mu.Lock()
 	log.Debugf("[checkHeartbeatTimeoutOrElection] Server %v start, state: %v, term: %v, votedFor: %v", rf.me, rf.state, rf.currentTerm, rf.votedFor)
-	if rf.state == Follower && rf.isHeartbeatTimeout(ctx) && rf.votedFor == -1 {
+	if rf.state == Follower && (rf.isHeartbeatTimeout(ctx) && rf.votedFor == -1) {
 		rf.state = Candidate
 	}
-	// if rf.state == Follower && (rf.isHeartbeatTimeout(ctx) || rf.votedFor == -1) {
-	// 	rf.state = Candidate
-	// }
+
 	// Here can resolve the case that leader has sent AppendEntries
 	if rf.state != Candidate {
 		rf.mu.Unlock()
@@ -475,9 +470,8 @@ func (rf *Raft) checkHeartbeatTimeoutOrElection(ctx context.Context) {
 	//	  4.1. Election timeout;
 	//	  4.2. Receive the most of votes from other servers;
 	//    4.3. Once received RPC AppendEntry from leader, become follower.
-	// No +1 because self vote for self, excceed half
-	successVoteNums := len(rf.peers) / 2
-	voteNums := 0
+	successVoteNums := len(rf.peers)/2 + 1
+	voteNums := 1
 	go func(ctx context.Context) {
 		for i := range rf.peers {
 			if i == rf.me {
@@ -513,7 +507,7 @@ func (rf *Raft) checkHeartbeatTimeoutOrElection(ctx context.Context) {
 
 		isFinished := false
 		rf.mu.Lock()
-		if voteNums >= successVoteNums {
+		if rf.state == Candidate && voteNums >= successVoteNums {
 			log.Infof("[checkHeartbeatTimeoutOrElection] Server %v received the most vote, and become leader in term %v", rf.me, rf.currentTerm)
 			// If election is successful
 			rf.state = Leader

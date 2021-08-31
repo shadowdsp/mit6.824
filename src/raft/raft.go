@@ -261,10 +261,10 @@ func (rf *Raft) AppendEntries(args *AppendEntriesArgs, reply *AppendEntriesReply
 		return
 	}
 	if args.Term >= rf.currentTerm && rf.state == Candidate {
-		// 阻止目前的 candidate 进行投票
+		// 收到心跳，阻止目前的 candidate 进行投票，并将目前的 candidate 状态变成 follower
 		rf.state = Follower
 		// ??? should we set -1 here?
-		rf.votedFor = -1
+		// rf.votedFor = -1
 	}
 	rf.checkTermOrUpdateState(args.Term)
 	reply.Term = rf.currentTerm
@@ -444,7 +444,7 @@ func (rf *Raft) checkHeartbeatTimeoutOrElection(ctx context.Context) {
 	// Become a candidate.
 	rf.mu.Lock()
 	log.Debugf("[checkHeartbeatTimeoutOrElection] Server %v start, state: %v, term: %v, votedFor: %v", rf.me, rf.state, rf.currentTerm, rf.votedFor)
-	if rf.state == Follower && (rf.isHeartbeatTimeout(ctx) && rf.votedFor == -1) {
+	if rf.state == Follower && (rf.isHeartbeatTimeout(ctx) || rf.votedFor == -1) {
 		rf.state = Candidate
 	}
 

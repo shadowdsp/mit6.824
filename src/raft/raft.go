@@ -86,7 +86,7 @@ type Raft struct {
 	// Persistent state on server
 	currentTerm int
 	// votedFor initial state is -1
-	votedFor int
+	votedFor []int
 	logs     []*LogEntry
 
 	// Volatile state on server
@@ -207,10 +207,10 @@ type AppendEntriesReply struct {
 
 func (rf *Raft) checkTermOrUpdateState(term int) {
 	if term > rf.currentTerm {
-		rf.state = Follower
-		rf.currentTerm = term
 		// need this ?
 		rf.votedFor = -1
+		rf.state = Follower
+		rf.currentTerm = term
 	}
 }
 
@@ -263,11 +263,14 @@ func (rf *Raft) AppendEntries(args *AppendEntriesArgs, reply *AppendEntriesReply
 		return
 	}
 	if args.Term >= rf.currentTerm && rf.state == Candidate {
+		// 阻止目前的 candidate 进行投票
 		rf.state = Follower
+		rf.votedFor = -1
 	}
 	rf.checkTermOrUpdateState(args.Term)
 	reply.Term = rf.currentTerm
 	rf.lastHeartbeatTime = time.Now()
+	// rf.votedFor = -1
 	log.Debugf("[AppendEntries] After: Server %v state: %v, currentTerm: %v, log size: %v,  args: %+v, lastHeartbeat: %v", rf.me, rf.state, rf.currentTerm, len(rf.logs), args, rf.lastHeartbeatTime)
 	return
 

@@ -486,9 +486,6 @@ func (rf *Raft) electLeader(ctx context.Context) {
 	rf.mu.Unlock()
 
 	// 4. Send RequestVote RPC to other servers.
-	//	  4.1. Election timeout;
-	//	  4.2. Receive the most of votes from other servers;
-	//    4.3. Once received RPC AppendEntry from leader, become follower.
 	successVoteNums := len(rf.peers)/2 + 1
 	voteNums := 1
 	go func(ctx context.Context) {
@@ -526,6 +523,10 @@ func (rf *Raft) electLeader(ctx context.Context) {
 
 		isFinished := false
 		rf.mu.Lock()
+		// 5. Stop election if:
+		//	  5.1. Election timeout;
+		//	  5.2. Receive the most of votes from other servers;
+		//    5.3. Once received RPC AppendEntry from leader, become follower.
 		if rf.state == Candidate && voteNums >= successVoteNums {
 			log.Infof("[electLeader] Server %v received the most vote, election success and become leader in term %v", rf.me, rf.currentTerm)
 			// If election is successful

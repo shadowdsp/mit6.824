@@ -232,8 +232,6 @@ func (rf *Raft) RequestVote(args *RequestVoteArgs, reply *RequestVoteReply) {
 	}
 	rf.checkTermOrUpdateState(args.Term)
 	reply.Term = rf.currentTerm
-	log.Debugf("[RequestVote] Log2 Server %v state: %v, currentTerm: %v, voteFor: %v, log size: %v,  args: %+v,", rf.me, rf.state, rf.currentTerm, rf.votedFor, len(rf.logs), args)
-
 	if rf.votedFor == -1 || rf.votedFor == args.CandidateID {
 		// Make sure candidate is as up to date as follower
 		if len(rf.logs) <= 0 || (args.LastLogIndex <= len(rf.logs)-1 && args.LastLogTerm <= rf.logs[len(rf.logs)-1].Term) {
@@ -241,6 +239,7 @@ func (rf *Raft) RequestVote(args *RequestVoteArgs, reply *RequestVoteReply) {
 			rf.votedFor = args.CandidateID
 		}
 	}
+	log.Debugf("[RequestVote] Log2 Server %v state: %v, currentTerm: %v, voteFor: %v, log size: %v,  args: %+v,", rf.me, rf.state, rf.currentTerm, rf.votedFor, len(rf.logs), args)
 	return
 }
 
@@ -264,6 +263,7 @@ func (rf *Raft) AppendEntries(args *AppendEntriesArgs, reply *AppendEntriesReply
 	if args.Term >= rf.currentTerm && rf.state == Candidate {
 		// 阻止目前的 candidate 进行投票
 		rf.state = Follower
+		// ??? should we set -1 here?
 		rf.votedFor = -1
 	}
 	rf.checkTermOrUpdateState(args.Term)
@@ -508,13 +508,13 @@ func (rf *Raft) checkHeartbeatTimeoutOrElection(ctx context.Context) {
 		isFinished := false
 		rf.mu.Lock()
 		if rf.state == Candidate && voteNums >= successVoteNums {
-			log.Infof("[checkHeartbeatTimeoutOrElection] Server %v received the most vote, and become leader in term %v", rf.me, rf.currentTerm)
+			log.Infof("[checkHeartbeatTimeoutOrElection] Server %v received the most vote, election success and become leader in term %v", rf.me, rf.currentTerm)
 			// If election is successful
 			rf.state = Leader
 			electionSuccess = true
 			isFinished = true
 		} else if rf.state == Follower {
-			log.Infof("[checkHeartbeatTimeoutOrElection] Server %v received the heartbeat from other server, and become follower in term %v", rf.me, rf.currentTerm)
+			log.Infof("[checkHeartbeatTimeoutOrElection] Server %v received the heartbeat from other server, stop election and become follower in term %v", rf.me, rf.currentTerm)
 			// If receive Heartbeat from leader
 			isFinished = true
 		} else if time.Now().After(electTimeoutDuration) {

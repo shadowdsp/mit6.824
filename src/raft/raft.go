@@ -53,7 +53,7 @@ type ApplyMsg struct {
 const (
 	heartbeatTimeoutLimit     = 1 * time.Second
 	heartbeatInterval         = 200 * time.Millisecond
-	electionInterval          = 500 * time.Millisecond
+	electionInterval          = 300 * time.Millisecond
 	electionTimeoutLowerBound = 300
 	electionTimeoutUpperBound = 600
 )
@@ -100,11 +100,12 @@ type Raft struct {
 	nextIndex  []int
 	matchIndex []int
 
+	// follower election timeout timestamp
+	electionTimeoutAt time.Time
+	// follower election start timestamp
+	electionStartAt time.Time
 	// the last heartbeat time received from leader
-	lastHeartbeatTime time.Time
-
-	// electionTimer
-	electionChan chan struct{}
+	lastHeartbeatAt time.Time
 }
 
 type LogEntry struct {
@@ -207,7 +208,6 @@ type AppendEntriesReply struct {
 
 func (rf *Raft) checkTermOrUpdateState(term int) {
 	if term > rf.currentTerm {
-		// need this ?
 		rf.votedFor = -1
 		rf.state = Follower
 		rf.currentTerm = term
@@ -222,7 +222,7 @@ func (rf *Raft) RequestVote(args *RequestVoteArgs, reply *RequestVoteReply) {
 	rf.mu.Lock()
 	defer rf.mu.Unlock()
 
-	log.Debugf("[RequestVote] Log1 Server %v state: %v, currentTerm: %v, voteFor: %v, log size: %v,  args: %+v,", rf.me, rf.state, rf.currentTerm, rf.votedFor, len(rf.logs), args)
+	log.Debugf("[RequestVote] Start: Server %v state: %v, currentTerm: %v, voteFor: %v, log size: %v,  args: %+v,", rf.me, rf.state, rf.currentTerm, rf.votedFor, len(rf.logs), args)
 
 	reply.ServerID = rf.me
 	reply.VoteGranted = false
@@ -239,7 +239,7 @@ func (rf *Raft) RequestVote(args *RequestVoteArgs, reply *RequestVoteReply) {
 			rf.votedFor = args.CandidateID
 		}
 	}
-	log.Debugf("[RequestVote] Log2 Server %v state: %v, currentTerm: %v, voteFor: %v, log size: %v,  args: %+v,", rf.me, rf.state, rf.currentTerm, rf.votedFor, len(rf.logs), args)
+	log.Debugf("[RequestVote] Finish: Server %v state: %v, currentTerm: %v, voteFor: %v, log size: %v,  args: %+v,", rf.me, rf.state, rf.currentTerm, rf.votedFor, len(rf.logs), args)
 	return
 }
 
@@ -252,24 +252,22 @@ func (rf *Raft) AppendEntries(args *AppendEntriesArgs, reply *AppendEntriesReply
 	rf.mu.Lock()
 	defer rf.mu.Unlock()
 
-	log.Debugf("[AppendEntries] Before: Server %v state: %v, currentTerm: %v, log size: %v,  args: %+v, lastHeartbeat: %v", rf.me, rf.state, rf.currentTerm, len(rf.logs), args, rf.lastHeartbeatTime)
+	log.Debugf("[AppendEntries] Before: Server %v state: %v, currentTerm: %v, log size: %v,  args: %+v", rf.me, rf.state, rf.currentTerm, len(rf.logs), args)
 
 	reply.Term = rf.currentTerm
 	reply.Success = true
 	if args.Term < rf.currentTerm {
-		// Important!!!
+		// Leader who sends AppendEntries is out of term
 		return
 	}
 	if args.Term >= rf.currentTerm && rf.state == Candidate {
-		// 收到心跳，阻止目前的 candidate 进行投票，并将目前的 candidate 状态变成 follower
+		// received heartbeat, stop voting and change state to Follower
 		rf.state = Follower
-		// ??? should we set -1 here?
-		// rf.votedFor = -1
 	}
 	rf.checkTermOrUpdateState(args.Term)
 	reply.Term = rf.currentTerm
-	rf.lastHeartbeatTime = time.Now()
-	log.Debugf("[AppendEntries] After: Server %v state: %v, currentTerm: %v, log size: %v,  args: %+v, lastHeartbeat: %v", rf.me, rf.state, rf.currentTerm, len(rf.logs), args, rf.lastHeartbeatTime)
+	rf.lastHeartbeatAt = time.Now()
+	log.Debugf("[AppendEntries] After: Server %v state: %v, currentTerm: %v, log size: %v,  args: %+v", rf.me, rf.state, rf.currentTerm, len(rf.logs), args)
 	return
 
 	// // TODO: We need a more efficient data-structrue to maintain logs
@@ -424,47 +422,68 @@ func (rf *Raft) killed() bool {
 }
 
 // Customized functions
-func (rf *Raft) isHeartbeatTimeout(ctx context.Context) bool {
-	if time.Now().After(rf.lastHeartbeatTime.Add(heartbeatTimeoutLimit)) {
-		log.Debugf("Server %v is HeartbeatTimeout, state %v, term %v, votedFor %+v", rf.me, rf.state, rf.currentTerm, rf.votedFor)
+func (rf *Raft) isElectionTimeout(ctx context.Context) bool {
+	if time.Now().After(rf.electionTimeoutAt) {
+		log.Debugf("Server %v is election timeout, state %v, term %v, votedFor %+v", rf.me, rf.state, rf.currentTerm, rf.votedFor)
 		return true
 	}
 	return false
 }
 
-func (rf *Raft) getRandomElectionTimeout() time.Time {
-	return time.Now().Add(time.Millisecond * time.Duration(rand.Intn(electionTimeoutUpperBound-electionTimeoutLowerBound)+electionTimeoutLowerBound))
+// func (rf *Raft) getRandomElectionTimeout() time.Time {
+// 	return time.Now().Add(time.Millisecond * time.Duration(rand.Intn(electionTimeoutUpperBound-electionTimeoutLowerBound)+electionTimeoutLowerBound))
+// }
+
+func (rf *Raft) resetElectionTimeout() {
+	rf.electionStartAt = time.Now()
+	rf.electionTimeoutAt = rf.electionStartAt.Add(
+		time.Millisecond * time.Duration(rand.Intn(electionTimeoutUpperBound-electionTimeoutLowerBound)+electionTimeoutLowerBound))
 }
 
-func (rf *Raft) checkHeartbeatTimeoutOrElection(ctx context.Context) {
-	defer log.Debugf("[checkHeartbeatTimeoutOrElection] Server %v finished", rf.me)
-
-	// If 1. not receieved heartbeat from leader for a while,
-	//    2. not vote for other candidate.
-	// Become a candidate.
-	rf.mu.Lock()
-	log.Debugf("[checkHeartbeatTimeoutOrElection] Server %v start, state: %v, term: %v, votedFor: %v", rf.me, rf.state, rf.currentTerm, rf.votedFor)
-	if rf.state == Follower && (rf.isHeartbeatTimeout(ctx) || rf.votedFor == -1) {
-		rf.state = Candidate
+func (rf *Raft) isHeartbeartTimeout() bool {
+	if rf.lastHeartbeatAt.Before(time.Now()) {
+		log.Debugf("Server %v is heartbeat timeout, state %v, term %v, votedFor %+v", rf.me, rf.state, rf.currentTerm, rf.votedFor)
+		return true
 	}
+	return false
+}
 
-	// Here can resolve the case that leader has sent AppendEntries
-	if rf.state != Candidate {
+func (rf *Raft) checkElectionCronjob(ctx context.Context) {
+	rf.resetElectionTimeout()
+	for {
+		time.Sleep(10 * time.Millisecond)
+		rf.mu.Lock()
+		log.Debugf("[checkElectionCronjob] Server %v state: %v, term: %v, votedFor: %v", rf.me, rf.state, rf.currentTerm, rf.votedFor)
+		if rf.isElectionTimeout(ctx) {
+			if rf.state == Follower && (rf.isHeartbeartTimeout() || rf.votedFor == -1) {
+				// If 1. not receieved heartbeat from leader before election timeout
+				//    2. not vote for other candidate.
+				// Become a candidate.
+				rf.state = Candidate
+			}
+		}
+		isCandidate := rf.state == Candidate
 		rf.mu.Unlock()
-		return
+		if isCandidate {
+			go rf.electLeader(ctx)
+		}
 	}
+}
 
+func (rf *Raft) electLeader(ctx context.Context) {
+	defer log.Debugf("[electLeader] Server %v finished", rf.me)
+
+	rf.mu.Lock()
 	// Candidate start leader election.
 	// 1. Increase currentTerm;
 	rf.currentTerm++
 	// 2. Vote for self;
 	rf.votedFor = rf.me
-
-	log.Debugf("[checkHeartbeatTimeoutOrElection] Server %v start election, state: %v, term: %v", rf.me, rf.state, rf.currentTerm)
-	rf.mu.Unlock()
-
 	// 3. Reset election timer;
-	electTimeoutDuration := rf.getRandomElectionTimeout()
+	rf.resetElectionTimeout()
+
+	log.Debugf("[electLeader] Server %v start election, state: %v, term: %v", rf.me, rf.state, rf.currentTerm)
+	rf.mu.Unlock()
 
 	// 4. Send RequestVote RPC to other servers.
 	//	  4.1. Election timeout;
@@ -485,7 +504,7 @@ func (rf *Raft) checkHeartbeatTimeoutOrElection(ctx context.Context) {
 					// LastLogIndex: len(rf.logs) - 1,
 					// LastLogTerm:  rf.logs[len(rf.logs)-1].Term,
 				}
-				log.Debugf("[checkHeartbeatTimeoutOrElection] Server %v sendRequestVote to server %d, args: %+v", rf.me, serverID, args)
+				log.Debugf("[electLeader] Server %v sendRequestVote to server %d, args: %+v", rf.me, serverID, args)
 				rf.mu.Unlock()
 
 				reply := &RequestVoteReply{}
@@ -494,7 +513,7 @@ func (rf *Raft) checkHeartbeatTimeoutOrElection(ctx context.Context) {
 				if reply.VoteGranted {
 					rf.mu.Lock()
 					voteNums++
-					log.Debugf("[checkHeartbeatTimeoutOrElection] Server %v received vote from %v in term %v, currentVoteNums: %v, successVoteNums: %v", rf.me, reply.ServerID, rf.currentTerm, voteNums, successVoteNums)
+					log.Debugf("[electLeader] Server %v received vote from %v in term %v, currentVoteNums: %v, successVoteNums: %v", rf.me, reply.ServerID, rf.currentTerm, voteNums, successVoteNums)
 					rf.mu.Unlock()
 				}
 			}(i)
@@ -508,17 +527,17 @@ func (rf *Raft) checkHeartbeatTimeoutOrElection(ctx context.Context) {
 		isFinished := false
 		rf.mu.Lock()
 		if rf.state == Candidate && voteNums >= successVoteNums {
-			log.Infof("[checkHeartbeatTimeoutOrElection] Server %v received the most vote, election success and become leader in term %v", rf.me, rf.currentTerm)
+			log.Infof("[electLeader] Server %v received the most vote, election success and become leader in term %v", rf.me, rf.currentTerm)
 			// If election is successful
 			rf.state = Leader
 			electionSuccess = true
 			isFinished = true
 		} else if rf.state == Follower {
-			log.Infof("[checkHeartbeatTimeoutOrElection] Server %v received the heartbeat from other server, stop election and become follower in term %v", rf.me, rf.currentTerm)
+			log.Infof("[electLeader] Server %v received the heartbeat from other server, stop election and become follower in term %v", rf.me, rf.currentTerm)
 			// If receive Heartbeat from leader
 			isFinished = true
-		} else if time.Now().After(electTimeoutDuration) {
-			log.Infof("[checkHeartbeatTimeoutOrElection] Server %v election timeout in term %v", rf.me, rf.currentTerm)
+		} else if rf.isElectionTimeout(ctx) {
+			log.Infof("[electLeader] Server %v election timeout in term %v", rf.me, rf.currentTerm)
 			rf.state = Follower
 			rf.votedFor = -1
 			isFinished = true
@@ -589,19 +608,7 @@ func Make(peers []*labrpc.ClientEnd, me int,
 
 	ctx := context.Background()
 	// Your initialization code here (2A, 2B, 2C).
-	go func(ctx context.Context) {
-		// check heartbeat timeout or election
-		electionTicker := time.NewTicker(electionInterval)
-		for {
-			// Every 500ms checkHeartbeatTimeoutOrElection
-			select {
-			case <-electionTicker.C:
-				rf.checkHeartbeatTimeoutOrElection(ctx)
-			case <-ctx.Done():
-				log.Warnf("Election context done !")
-			}
-		}
-	}(ctx)
+	go rf.checkElectionCronjob(ctx)
 
 	go func(ctx context.Context) {
 		heartbeatTicker := time.NewTicker(heartbeatInterval)
@@ -625,8 +632,8 @@ func Make(peers []*labrpc.ClientEnd, me int,
 func init() {
 	log.SetOutput(os.Stdout)
 	// Only log the warning severity or above.
-	log.SetLevel(log.DebugLevel)
-	// log.SetLevel(log.WarnLevel)
+	// log.SetLevel(log.DebugLevel)
+	log.SetLevel(log.WarnLevel)
 	log.SetFormatter(&log.TextFormatter{
 		// DisableColors: true,
 		FullTimestamp: true,

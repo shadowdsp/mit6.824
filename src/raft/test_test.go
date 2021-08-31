@@ -54,7 +54,7 @@ func TestInitialElection2A(t *testing.T) {
 
 func TestReElection2A(t *testing.T) {
 	servers := 3
-	for round := 0; round < 1; round++ {
+	for round := 0; round < 20; round++ {
 		cfg := make_config(t, servers, false)
 		defer cfg.cleanup()
 

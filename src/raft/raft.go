@@ -104,8 +104,8 @@ type Raft struct {
 	electionTimeoutAt time.Time
 	// follower election start timestamp
 	electionStartAt time.Time
-	// the last heartbeat time received from leader
-	lastHeartbeatAt time.Time
+	// the last heartbeat time received from leader + heartbeatTimeoutLimit
+	heartbeatTimeoutAt time.Time
 }
 
 type LogEntry struct {
@@ -266,7 +266,7 @@ func (rf *Raft) AppendEntries(args *AppendEntriesArgs, reply *AppendEntriesReply
 	}
 	rf.checkTermOrUpdateState(args.Term)
 	reply.Term = rf.currentTerm
-	rf.lastHeartbeatAt = time.Now()
+	rf.heartbeatTimeoutAt = time.Now().Add(heartbeatTimeoutLimit)
 	log.Debugf("[AppendEntries] After: Server %v state: %v, currentTerm: %v, log size: %v,  args: %+v", rf.me, rf.state, rf.currentTerm, len(rf.logs), args)
 	return
 
@@ -441,7 +441,7 @@ func (rf *Raft) resetElectionTimeout() {
 }
 
 func (rf *Raft) isHeartbeartTimeout() bool {
-	if rf.lastHeartbeatAt.Before(time.Now()) {
+	if time.Now().After(rf.heartbeatTimeoutAt) {
 		log.Debugf("Server %v is heartbeat timeout, state %v, term %v, votedFor %+v", rf.me, rf.state, rf.currentTerm, rf.votedFor)
 		return true
 	}
@@ -451,7 +451,7 @@ func (rf *Raft) isHeartbeartTimeout() bool {
 func (rf *Raft) checkElectionCronjob(ctx context.Context) {
 	rf.resetElectionTimeout()
 	for {
-		time.Sleep(10 * time.Millisecond)
+		time.Sleep(20 * time.Millisecond)
 		rf.mu.Lock()
 		log.Debugf("[checkElectionCronjob] Server %v state: %v, term: %v, votedFor: %v", rf.me, rf.state, rf.currentTerm, rf.votedFor)
 		if rf.isElectionTimeout(ctx) {

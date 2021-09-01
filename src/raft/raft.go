@@ -102,10 +102,6 @@ type Raft struct {
 
 	// follower election timeout timestamp
 	electionTimeoutAt time.Time
-	// follower election start timestamp
-	electionStartAt time.Time
-	// the last heartbeat time received from leader + heartbeatTimeoutLimit
-	heartbeatTimeoutAt time.Time
 }
 
 type LogEntry struct {
@@ -266,7 +262,7 @@ func (rf *Raft) AppendEntries(args *AppendEntriesArgs, reply *AppendEntriesReply
 	}
 	rf.checkTermOrUpdateState(args.Term)
 	reply.Term = rf.currentTerm
-	rf.heartbeatTimeoutAt = time.Now().Add(heartbeatTimeoutLimit)
+	rf.resetElectionTimeout()
 	log.Debugf("[AppendEntries] After: Server %v state: %v, currentTerm: %v, log size: %v,  args: %+v", rf.me, rf.state, rf.currentTerm, len(rf.logs), args)
 	return
 
@@ -430,22 +426,9 @@ func (rf *Raft) isElectionTimeout(ctx context.Context) bool {
 	return false
 }
 
-// func (rf *Raft) getRandomElectionTimeout() time.Time {
-// 	return time.Now().Add(time.Millisecond * time.Duration(rand.Intn(electionTimeoutUpperBound-electionTimeoutLowerBound)+electionTimeoutLowerBound))
-// }
-
 func (rf *Raft) resetElectionTimeout() {
-	rf.electionStartAt = time.Now()
-	rf.electionTimeoutAt = rf.electionStartAt.Add(
+	rf.electionTimeoutAt = time.Now().Add(
 		time.Millisecond * time.Duration(rand.Intn(electionTimeoutUpperBound-electionTimeoutLowerBound)+electionTimeoutLowerBound))
-}
-
-func (rf *Raft) isHeartbeartTimeout() bool {
-	if time.Now().After(rf.heartbeatTimeoutAt) {
-		log.Debugf("Server %v is heartbeat timeout, state %v, term %v, votedFor %+v", rf.me, rf.state, rf.currentTerm, rf.votedFor)
-		return true
-	}
-	return false
 }
 
 func (rf *Raft) checkElectionCronjob(ctx context.Context) {
@@ -454,13 +437,11 @@ func (rf *Raft) checkElectionCronjob(ctx context.Context) {
 		time.Sleep(20 * time.Millisecond)
 		rf.mu.Lock()
 		log.Debugf("[checkElectionCronjob] Server %v state: %v, term: %v, votedFor: %v", rf.me, rf.state, rf.currentTerm, rf.votedFor)
-		if rf.isElectionTimeout(ctx) {
-			if rf.state == Follower && (rf.isHeartbeartTimeout() || rf.votedFor == -1) {
-				// If 1. not receieved heartbeat from leader before election timeout
-				//    2. not vote for other candidate.
-				// Become a candidate.
-				rf.state = Candidate
-			}
+		if rf.state == Follower && (rf.isElectionTimeout(ctx) || rf.votedFor == -1) {
+			// If 1. not receieved heartbeat from leader before election timeout
+			//    2. not vote for other candidate.
+			// Become a candidate.
+			rf.state = Candidate
 		}
 		isCandidate := rf.state == Candidate
 		rf.mu.Unlock()

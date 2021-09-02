@@ -51,10 +51,8 @@ type ApplyMsg struct {
 }
 
 const (
-	heartbeatTimeoutLimit     = 1 * time.Second
 	heartbeatInterval         = 200 * time.Millisecond
-	electionInterval          = 300 * time.Millisecond
-	electionTimeoutLowerBound = 300
+	electionTimeoutLowerBound = 400
 	electionTimeoutUpperBound = 600
 )
 
@@ -87,18 +85,18 @@ type Raft struct {
 	currentTerm int
 	// votedFor initial state is -1
 	votedFor int
-	logs     []*LogEntry
+	// logs     []*LogEntry
 
 	// Volatile state on server
-	commitIndex int
-	lastApplied int
+	// commitIndex int
+	// lastApplied int
 
 	// Volatile state on candidate
 	receivedVote map[int]bool
 
 	// Volatile state on leader
-	nextIndex  []int
-	matchIndex []int
+	// nextIndex  []int
+	// matchIndex []int
 
 	// follower election timeout timestamp
 	electionTimeoutAt time.Time
@@ -186,13 +184,13 @@ type RequestVoteReply struct {
 
 // AppendEntriesArgs RPC argument structure
 type AppendEntriesArgs struct {
-	Term         int
-	LeaderID     int
-	PrevLogIndex int
-	PrevLogTerm  int
-	Logs         []*LogEntry
-	LeaderCommit int
-	ServerID     int
+	Term int
+	// LeaderID     int
+	// PrevLogIndex int
+	// PrevLogTerm  int
+	// Logs         []*LogEntry
+	// LeaderCommit int
+	ServerID int
 }
 
 // AppendEntriesReply RPC reply structure
@@ -218,7 +216,7 @@ func (rf *Raft) RequestVote(args *RequestVoteArgs, reply *RequestVoteReply) {
 	rf.mu.Lock()
 	defer rf.mu.Unlock()
 
-	log.Debugf("[RequestVote] Start: Server %v state: %v, currentTerm: %v, voteFor: %v, log size: %v,  args: %+v,", rf.me, rf.state, rf.currentTerm, rf.votedFor, len(rf.logs), args)
+	log.Debugf("[RequestVote] Start: Server %v state: %v, currentTerm: %v, voteFor: %v,  args: %+v,", rf.me, rf.state, rf.currentTerm, rf.votedFor, args)
 
 	reply.ServerID = rf.me
 	reply.VoteGranted = false
@@ -230,12 +228,14 @@ func (rf *Raft) RequestVote(args *RequestVoteArgs, reply *RequestVoteReply) {
 	reply.Term = rf.currentTerm
 	if rf.votedFor == -1 || rf.votedFor == args.CandidateID {
 		// Make sure candidate is as up to date as follower
-		if len(rf.logs) <= 0 || (args.LastLogIndex <= len(rf.logs)-1 && args.LastLogTerm <= rf.logs[len(rf.logs)-1].Term) {
-			reply.VoteGranted = true
-			rf.votedFor = args.CandidateID
-		}
+		reply.VoteGranted = true
+		rf.votedFor = args.CandidateID
+		// if len(rf.logs) <= 0 || (args.LastLogIndex <= len(rf.logs)-1 && args.LastLogTerm <= rf.logs[len(rf.logs)-1].Term) {
+		// 	reply.VoteGranted = true
+		// 	rf.votedFor = args.CandidateID
+		// }
 	}
-	log.Debugf("[RequestVote] Finish: Server %v state: %v, currentTerm: %v, voteFor: %v, log size: %v,  args: %+v,", rf.me, rf.state, rf.currentTerm, rf.votedFor, len(rf.logs), args)
+	log.Debugf("[RequestVote] Finish: Server %v state: %v, currentTerm: %v, voteFor: %v,  args: %+v,", rf.me, rf.state, rf.currentTerm, rf.votedFor, args)
 	return
 }
 
@@ -248,7 +248,7 @@ func (rf *Raft) AppendEntries(args *AppendEntriesArgs, reply *AppendEntriesReply
 	rf.mu.Lock()
 	defer rf.mu.Unlock()
 
-	log.Debugf("[AppendEntries] Before: Server %v state: %v, currentTerm: %v, log size: %v,  args: %+v", rf.me, rf.state, rf.currentTerm, len(rf.logs), args)
+	log.Debugf("[AppendEntries] Before: Server %v state: %v, currentTerm: %v,  args: %+v", rf.me, rf.state, rf.currentTerm, args)
 
 	reply.Term = rf.currentTerm
 	reply.Success = true
@@ -263,7 +263,7 @@ func (rf *Raft) AppendEntries(args *AppendEntriesArgs, reply *AppendEntriesReply
 	rf.checkTermOrUpdateState(args.Term)
 	reply.Term = rf.currentTerm
 	rf.resetElectionTimeout()
-	log.Debugf("[AppendEntries] After: Server %v state: %v, currentTerm: %v, log size: %v,  args: %+v", rf.me, rf.state, rf.currentTerm, len(rf.logs), args)
+	log.Debugf("[AppendEntries] After: Server %v state: %v, currentTerm: %v,  args: %+v", rf.me, rf.state, rf.currentTerm, args)
 	return
 
 	// // TODO: We need a more efficient data-structrue to maintain logs
@@ -551,12 +551,12 @@ func (rf *Raft) sendHeartbeat(ctx context.Context) {
 				defer wg.Done()
 				rf.mu.Lock()
 				args := &AppendEntriesArgs{
-					Term:         rf.currentTerm,
-					LeaderID:     rf.me,
-					PrevLogTerm:  1,
-					PrevLogIndex: 1,
-					Logs:         nil,
-					LeaderCommit: 1,
+					Term: rf.currentTerm,
+					// LeaderID:     rf.me,
+					// PrevLogTerm:  1,
+					// PrevLogIndex: 1,
+					// Logs:         nil,
+					// LeaderCommit: 1,
 				}
 				rf.mu.Unlock()
 				reply := &AppendEntriesReply{}
@@ -584,7 +584,7 @@ func Make(peers []*labrpc.ClientEnd, me int,
 	rf.peers = peers
 	rf.persister = persister
 	rf.me = me
-	rf.logs = make([]*LogEntry, 0)
+	// rf.logs = make([]*LogEntry, 0)
 	rf.state = Follower
 	rf.votedFor = -1
 

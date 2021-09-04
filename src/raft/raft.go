@@ -19,6 +19,7 @@ package raft
 
 import (
 	"context"
+	"fmt"
 	"math/rand"
 	"os"
 	"sync"
@@ -51,9 +52,10 @@ type ApplyMsg struct {
 }
 
 const (
-	heartbeatInterval         = 200 * time.Millisecond
+	heartbeatInterval         = 120 * time.Millisecond
 	electionTimeoutLowerBound = 400
 	electionTimeoutUpperBound = 600
+	rpcTimeoutLimit           = 1000 * time.Millisecond
 )
 
 type State string
@@ -119,6 +121,14 @@ func (rf *Raft) GetState() (int, bool) {
 	isleader = (rf.state == Leader)
 	rf.mu.Unlock()
 	return term, isleader
+}
+
+func (rf *Raft) getState() State {
+	var state State
+	rf.mu.Lock()
+	state = rf.state
+	rf.mu.Unlock()
+	return state
 }
 
 //
@@ -235,6 +245,7 @@ func (rf *Raft) RequestVote(args *RequestVoteArgs, reply *RequestVoteReply) {
 		// 	rf.votedFor = args.CandidateID
 		// }
 	}
+	rf.resetElectionTimeout()
 	log.Debugf("[RequestVote] Finish: Server %v state: %v, currentTerm: %v, voteFor: %v,  args: %+v,", rf.me, rf.state, rf.currentTerm, rf.votedFor, args)
 	return
 }
@@ -356,6 +367,7 @@ func (rf *Raft) AppendEntries(args *AppendEntriesArgs, reply *AppendEntriesReply
 // that the caller passes the address of the reply struct with &, not
 // the struct itself.
 //
+
 func (rf *Raft) sendRequestVote(server int, args *RequestVoteArgs, reply *RequestVoteReply) bool {
 	ok := rf.peers[server].Call("Raft.RequestVote", args, reply)
 	rf.mu.Lock()
@@ -431,30 +443,30 @@ func (rf *Raft) resetElectionTimeout() {
 		time.Millisecond * time.Duration(rand.Intn(electionTimeoutUpperBound-electionTimeoutLowerBound)+electionTimeoutLowerBound))
 }
 
-func (rf *Raft) checkElectionCronjob(ctx context.Context) {
-	rf.resetElectionTimeout()
-	for {
-		time.Sleep(20 * time.Millisecond)
-		rf.mu.Lock()
-		log.Debugf("[checkElectionCronjob] Server %v state: %v, term: %v, votedFor: %v", rf.me, rf.state, rf.currentTerm, rf.votedFor)
-		if rf.state == Follower && (rf.isElectionTimeout(ctx) || rf.votedFor == -1) {
-			// If 1. not receieved heartbeat from leader before election timeout
-			//    2. not vote for other candidate.
-			// Become a candidate.
-			rf.state = Candidate
-		}
-		isCandidate := rf.state == Candidate
-		rf.mu.Unlock()
-		if isCandidate {
-			go rf.electLeader(ctx)
-		}
+func (rf *Raft) tryConvertToCdd(ctx context.Context) {
+	rf.mu.Lock()
+	defer rf.mu.Unlock()
+	if rf.state != Follower {
+		return
+	}
+
+	log.Debugf("[tryConvertToCdd] Server %v state: %v, term: %v, votedFor: %v", rf.me, rf.state, rf.currentTerm, rf.votedFor)
+	if rf.isElectionTimeout(ctx) || rf.votedFor == -1 {
+		// If 1. not receieved heartbeat from leader before election timeout
+		//    2. not vote for other candidate.
+		// Become a candidate.
+		rf.state = Candidate
 	}
 }
 
 func (rf *Raft) electLeader(ctx context.Context) {
-	defer log.Debugf("[electLeader] Server %v finished", rf.me)
+	defer log.Debugf("[Candidate] Server %v finished", rf.me)
 
 	rf.mu.Lock()
+	if rf.state != Candidate {
+		rf.mu.Unlock()
+		return
+	}
 	// Candidate start leader election.
 	// 1. Increase currentTerm;
 	rf.currentTerm++
@@ -463,7 +475,7 @@ func (rf *Raft) electLeader(ctx context.Context) {
 	// 3. Reset election timer;
 	rf.resetElectionTimeout()
 
-	log.Debugf("[electLeader] Server %v start election, state: %v, term: %v", rf.me, rf.state, rf.currentTerm)
+	log.Debugf("[Candidate] Server %v start election, state: %v, term: %v", rf.me, rf.state, rf.currentTerm)
 	rf.mu.Unlock()
 
 	// 4. Send RequestVote RPC to other servers.
@@ -482,7 +494,7 @@ func (rf *Raft) electLeader(ctx context.Context) {
 					// LastLogIndex: len(rf.logs) - 1,
 					// LastLogTerm:  rf.logs[len(rf.logs)-1].Term,
 				}
-				log.Debugf("[electLeader] Server %v sendRequestVote to server %d, args: %+v", rf.me, serverID, args)
+				log.Debugf("[Candidate] Server %v sendRequestVote to server %d, args: %+v", rf.me, serverID, args)
 				rf.mu.Unlock()
 
 				reply := &RequestVoteReply{}
@@ -491,14 +503,13 @@ func (rf *Raft) electLeader(ctx context.Context) {
 				if reply.VoteGranted {
 					rf.mu.Lock()
 					voteNums++
-					log.Debugf("[electLeader] Server %v received vote from %v in term %v, currentVoteNums: %v, successVoteNums: %v", rf.me, reply.ServerID, rf.currentTerm, voteNums, successVoteNums)
+					log.Debugf("[Candidate] Server %v received vote from %v in term %v, currentVoteNums: %v, successVoteNums: %v", rf.me, reply.ServerID, rf.currentTerm, voteNums, successVoteNums)
 					rf.mu.Unlock()
 				}
 			}(i)
 		}
 	}(ctx)
 
-	electionSuccess := false
 	for {
 		time.Sleep(10 * time.Millisecond)
 
@@ -509,19 +520,17 @@ func (rf *Raft) electLeader(ctx context.Context) {
 		//	  5.2. Receive the most of votes from other servers;
 		//    5.3. Once received RPC AppendEntry from leader, become follower.
 		if rf.state == Candidate && voteNums >= successVoteNums {
-			log.Infof("[electLeader] Server %v received the most vote, election success and become leader in term %v", rf.me, rf.currentTerm)
+			log.Infof("[Candidate] Server %v received the most vote, election success and become leader in term %v", rf.me, rf.currentTerm)
 			// If election is successful
 			rf.state = Leader
-			electionSuccess = true
 			isFinished = true
 		} else if rf.state == Follower {
-			log.Infof("[electLeader] Server %v received the heartbeat from other server, stop election and become follower in term %v", rf.me, rf.currentTerm)
+			log.Infof("[Candidate] Server %v received the heartbeat from other server, stop election and become follower in term %v", rf.me, rf.currentTerm)
 			// If receive Heartbeat from leader
 			isFinished = true
 		} else if rf.isElectionTimeout(ctx) {
-			log.Infof("[electLeader] Server %v election timeout in term %v", rf.me, rf.currentTerm)
+			log.Infof("[Candidate] Server %v election timeout in term %v", rf.me, rf.currentTerm)
 			rf.state = Follower
-			rf.votedFor = -1
 			isFinished = true
 		}
 		rf.mu.Unlock()
@@ -530,40 +539,86 @@ func (rf *Raft) electLeader(ctx context.Context) {
 			break
 		}
 	}
-
-	if electionSuccess {
-		// TODO: Use concurrency strategy and
-		// move it to another goroutine in other method is better.
-		rf.sendHeartbeat(ctx)
-	}
 }
 
 func (rf *Raft) sendHeartbeat(ctx context.Context) {
-	_, isleader := rf.GetState()
-	if isleader {
-		wg := sync.WaitGroup{}
-		wg.Add(len(rf.peers) - 1)
-		for i := range rf.peers {
-			if i == rf.me {
-				continue
-			}
-			go func(serverID int) {
-				defer wg.Done()
-				rf.mu.Lock()
-				args := &AppendEntriesArgs{
-					Term: rf.currentTerm,
-					// LeaderID:     rf.me,
-					// PrevLogTerm:  1,
-					// PrevLogIndex: 1,
-					// Logs:         nil,
-					// LeaderCommit: 1,
-				}
-				rf.mu.Unlock()
-				reply := &AppendEntriesReply{}
-				rf.sendAppendEntries(serverID, args, reply)
-			}(i)
+	time.Sleep(heartbeatInterval)
+	rf.mu.Lock()
+	if rf.state != Leader {
+		rf.mu.Unlock()
+		return
+	}
+	if rf.isElectionTimeout(ctx) {
+		rf.state = Follower
+		rf.mu.Unlock()
+		return
+	}
+	rf.mu.Unlock()
+
+	wg := sync.WaitGroup{}
+	wg.Add(len(rf.peers) - 1)
+
+	heartbeatNums := 1
+	heartbeatSuccessLimit := len(rf.peers)/2 + 1
+	for i := range rf.peers {
+		if i == rf.me {
+			continue
 		}
-		wg.Wait()
+		go func(serverID int) {
+			defer wg.Done()
+			rf.mu.Lock()
+			args := &AppendEntriesArgs{
+				Term: rf.currentTerm,
+				// LeaderID:     rf.me,
+				// PrevLogTerm:  1,
+				// PrevLogIndex: 1,
+				// Logs:         nil,
+				// LeaderCommit: 1,
+			}
+			rf.mu.Unlock()
+			reply := &AppendEntriesReply{}
+			ch := make(chan struct{}, 1)
+			go func() {
+				rf.sendAppendEntries(serverID, args, reply)
+				ch <- struct{}{}
+			}()
+			select {
+			case <-ch:
+				rf.mu.Lock()
+				heartbeatNums++
+				rf.mu.Unlock()
+				log.Println("finished")
+			case <-time.After(rpcTimeoutLimit):
+				log.Println("timeout")
+				// close(ch)
+			}
+		}(i)
+	}
+	wg.Wait()
+	if heartbeatNums < heartbeatSuccessLimit {
+		rf.mu.Lock()
+		rf.state = Follower
+		rf.mu.Unlock()
+	}
+}
+
+func (rf *Raft) run(ctx context.Context) error {
+	for {
+		time.Sleep(10 * time.Millisecond)
+		state := rf.getState()
+		switch state {
+		case Follower:
+			rf.tryConvertToCdd(ctx)
+			break
+		case Candidate:
+			rf.electLeader(ctx)
+			break
+		case Leader:
+			rf.sendHeartbeat(ctx)
+			break
+		default:
+			panic(fmt.Sprintf("Server %v is in unknown state %v", rf.me, rf.state))
+		}
 	}
 }
 
@@ -590,20 +645,7 @@ func Make(peers []*labrpc.ClientEnd, me int,
 
 	ctx := context.Background()
 	// Your initialization code here (2A, 2B, 2C).
-	go rf.checkElectionCronjob(ctx)
-
-	go func(ctx context.Context) {
-		heartbeatTicker := time.NewTicker(heartbeatInterval)
-		for {
-			// Every 200ms checkHeartbeatTimeoutOrElection
-			select {
-			case <-heartbeatTicker.C:
-				rf.sendHeartbeat(ctx)
-			case <-ctx.Done():
-				log.Warnf("Heartbeat context done !")
-			}
-		}
-	}(ctx)
+	go rf.run(ctx)
 
 	// initialize from state persisted before a crash
 	rf.readPersist(persister.ReadRaftState())

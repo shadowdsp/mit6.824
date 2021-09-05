@@ -245,7 +245,6 @@ func (rf *Raft) RequestVote(args *RequestVoteArgs, reply *RequestVoteReply) {
 		// 	rf.votedFor = args.CandidateID
 		// }
 	}
-	rf.resetElectionTimeout()
 	log.Debugf("[RequestVote] Finish: Server %v state: %v, currentTerm: %v, voteFor: %v,  args: %+v,", rf.me, rf.state, rf.currentTerm, rf.votedFor, args)
 	return
 }
@@ -635,20 +634,20 @@ func (rf *Raft) run(ctx context.Context) error {
 //
 func Make(peers []*labrpc.ClientEnd, me int,
 	persister *Persister, applyCh chan ApplyMsg) *Raft {
-	rf := &Raft{}
-	rf.peers = peers
-	rf.persister = persister
-	rf.me = me
-	// rf.logs = make([]*LogEntry, 0)
-	rf.state = Follower
-	rf.votedFor = -1
-
-	ctx := context.Background()
+	rf := &Raft{
+		peers:     peers,
+		persister: persister,
+		me:        me,
+		state:     Follower,
+		votedFor:  -1,
+	}
 	// Your initialization code here (2A, 2B, 2C).
-	go rf.run(ctx)
 
 	// initialize from state persisted before a crash
 	rf.readPersist(persister.ReadRaftState())
+
+	ctx := context.Background()
+	go rf.run(ctx)
 
 	return rf
 }

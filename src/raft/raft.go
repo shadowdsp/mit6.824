@@ -87,40 +87,33 @@ type Raft struct {
 	currentTerm int
 	// votedFor initial state is -1
 	votedFor int
-	// logs     []*LogEntry
+	logs     []*LogEntry
 
 	// Volatile state on server
-	// commitIndex int
-	// lastApplied int
+	commitIndex int
+	lastApplied int
 
 	// Volatile state on candidate
 	receivedVote map[int]bool
 
 	// Volatile state on leader
-	// nextIndex  []int
-	// matchIndex []int
+	nextIndex  []int
+	matchIndex []int
 
 	// follower election timeout timestamp
 	electionTimeoutAt time.Time
 }
 
 type LogEntry struct {
-	Content string
+	Command interface{}
 	Term    int
-	Index   int
 }
 
 // return currentTerm and whether this server
 // believes it is the leader.
 func (rf *Raft) GetState() (int, bool) {
-	var term int
-	var isleader bool
 	// Your code here (2A).
-	rf.mu.Lock()
-	term = rf.currentTerm
-	isleader = (rf.state == Leader)
-	rf.mu.Unlock()
-	return term, isleader
+	return rf.currentTerm, (rf.state == Leader)
 }
 
 func (rf *Raft) getState() State {
@@ -240,6 +233,7 @@ func (rf *Raft) RequestVote(args *RequestVoteArgs, reply *RequestVoteReply) {
 		// Make sure candidate is as up to date as follower
 		reply.VoteGranted = true
 		rf.votedFor = args.CandidateID
+		rf.resetElectionTimeout()
 		// if len(rf.logs) <= 0 || (args.LastLogIndex <= len(rf.logs)-1 && args.LastLogTerm <= rf.logs[len(rf.logs)-1].Term) {
 		// 	reply.VoteGranted = true
 		// 	rf.votedFor = args.CandidateID
@@ -398,12 +392,54 @@ func (rf *Raft) sendAppendEntries(server int, args *AppendEntriesArgs, reply *Ap
 // the leader.
 //
 func (rf *Raft) Start(command interface{}) (int, int, bool) {
-	index := -1
-	term := -1
-	isLeader := true
+	// index := -1
+	// term := -1
+	// isLeader := true
 
 	// Your code here (2B).
+	rf.mu.Lock()
+	index := len(rf.logs)
+	term, isLeader := rf.GetState()
+	rf.mu.Unlock()
+	if !isLeader {
+		return index, term, isLeader
+	}
 
+	for i := range rf.peers {
+		if i == rf.me {
+			continue
+		}
+		go func(serverID int) {
+			defer wg.Done()
+			rf.mu.Lock()
+			args := &AppendEntriesArgs{
+				Term: rf.currentTerm,
+				// LeaderID:     rf.me,
+				// PrevLogTerm:  1,
+				// PrevLogIndex: 1,
+				// Logs:         nil,
+				// LeaderCommit: 1,
+			}
+			rf.mu.Unlock()
+			reply := &AppendEntriesReply{}
+			ch := make(chan struct{}, 1)
+			go func() {
+				rf.sendAppendEntries(serverID, args, reply)
+				ch <- struct{}{}
+			}()
+			select {
+			case <-ch:
+				rf.mu.Lock()
+				heartbeatNums++
+				rf.mu.Unlock()
+				log.Println("finished")
+			case <-time.After(rpcTimeoutLimit):
+				log.Println("timeout")
+				// close(ch)
+			}
+		}(i)
+	}
+	// start agreement
 	return index, term, isLeader
 }
 
@@ -450,7 +486,7 @@ func (rf *Raft) tryConvertToCdd(ctx context.Context) {
 	}
 
 	log.Debugf("[tryConvertToCdd] Server %v state: %v, term: %v, votedFor: %v", rf.me, rf.state, rf.currentTerm, rf.votedFor)
-	if rf.isElectionTimeout(ctx) || rf.votedFor == -1 {
+	if rf.isElectionTimeout(ctx) {
 		// If 1. not receieved heartbeat from leader before election timeout
 		//    2. not vote for other candidate.
 		// Become a candidate.

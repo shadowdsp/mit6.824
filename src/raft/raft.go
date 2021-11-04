@@ -17,6 +17,11 @@ package raft
 //   in the same server.
 //
 
+// TODO:
+// 1. 使用 nextIndex 和 matchIndex
+// 2. 补充 start 方法
+// 2. 调整日志的 index 计算方式，使用 lastLogIndex 替代 len(rf.logs) - 1
+
 import (
 	"context"
 	"fmt"
@@ -212,6 +217,10 @@ func (rf *Raft) checkTermOrUpdateState(term int) {
 	}
 }
 
+func (rf *Raft) lastLogIndex() int {
+	return len(rf.logs) - 1
+}
+
 //
 // example RequestVote RPC handler.
 //
@@ -364,7 +373,7 @@ func (rf *Raft) sendAppendEntries(server int, args *AppendEntriesArgs, reply *Ap
 // command will ever be committed to the Raft log, since the leader
 // may fail or lose an election. even if the Raft instance has been killed,
 // this function should return gracefully.
-//
+
 // the first return value is the index that the command will appear at
 // if it's ever committed. the second return value is the current
 // term. the third return value is true if this server believes it is
@@ -389,28 +398,39 @@ func (rf *Raft) Start(command interface{}) (int, int, bool) {
 			continue
 		}
 		go func(serverID int) {
-			rf.mu.Lock()
-			args := &AppendEntriesArgs{
-				Term:         rf.currentTerm,
-				LeaderID:     rf.me,
-				PrevLogTerm:  rf.logs[len(rf.logs)-1].Term,
-				PrevLogIndex: len(rf.logs) - 1,
-				Logs:         []*LogEntry{{Command: command, Term: rf.currentTerm}},
-				LeaderCommit: rf.commitIndex,
-			}
-			rf.mu.Unlock()
-			reply := &AppendEntriesReply{}
-			ch := make(chan struct{}, 1)
-			go func() {
-				// TODO: resolve response
-				rf.sendAppendEntries(serverID, args, reply)
-				ch <- struct{}{}
-			}()
-			select {
-			case <-ch:
-				log.Println("finished")
-			case <-time.After(rpcTimeoutLimit):
-				log.Println("timeout")
+			for {
+				rf.mu.Lock()
+				prevLogIndex := rf.nextIndex[serverID] - 1
+				prevLogTerm := rf.logs[prevLogIndex].Term
+				logsToAppend := []*LogEntry{}
+				for i := prevLogIndex; i < len(rf.logs); i++ {
+					logsToAppend = append(logsToAppend, rf.logs[i])
+				}
+				args := &AppendEntriesArgs{
+					Term:         rf.currentTerm,
+					LeaderID:     rf.me,
+					PrevLogTerm:  prevLogTerm,
+					PrevLogIndex: prevLogIndex,
+					Logs:         []*LogEntry{{Command: command, Term: rf.currentTerm}},
+					LeaderCommit: rf.commitIndex,
+				}
+				rf.mu.Unlock()
+				reply := &AppendEntriesReply{}
+				ch := make(chan struct{}, 1)
+				go func() {
+					// TODO: resolve response
+					rf.sendAppendEntries(serverID, args, reply)
+					ch <- struct{}{}
+				}()
+				select {
+				case <-ch:
+					log.Println("finished")
+					if reply.Success == false {
+						// rf.
+					}
+				case <-time.After(rpcTimeoutLimit):
+					log.Println("timeout")
+				}
 			}
 		}(i)
 	}
@@ -466,6 +486,13 @@ func (rf *Raft) tryConvertToCdd(ctx context.Context) {
 		//    2. not vote for other candidate.
 		// Become a candidate.
 		rf.state = Candidate
+	}
+}
+
+func (rf *Raft) initializeLeaderState() {
+	rf.state = Leader
+	for i := 0; i < len(rf.peers); i++ {
+		rf.nextIndex[i] = len(rf.logs)
 	}
 }
 
@@ -532,7 +559,7 @@ func (rf *Raft) electLeader(ctx context.Context) {
 		if rf.state == Candidate && voteNums >= successVoteNums {
 			log.Infof("[Candidate] Server %v received the most vote, election success and become leader in term %v", rf.me, rf.currentTerm)
 			// If election is successful
-			rf.state = Leader
+			rf.initializeLeaderState()
 			isFinished = true
 		} else if rf.state == Follower {
 			log.Infof("[Candidate] Server %v received the heartbeat from other server, stop election and become follower in term %v", rf.me, rf.currentTerm)

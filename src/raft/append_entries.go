@@ -8,7 +8,7 @@ type AppendEntriesArgs struct {
 	LeaderID     int
 	PrevLogIndex int
 	PrevLogTerm  int
-	Logs         []*LogEntry
+	Logs         LogEntries
 	LeaderCommit int
 	ServerID     int
 }
@@ -48,9 +48,9 @@ func (rf *Raft) AppendEntries(args *AppendEntriesArgs, reply *AppendEntriesReply
 	rf.resetElectionTimeout()
 
 	// ==========
-	if args.Logs == nil || len(args.Logs) <= 0 {
-		return
-	}
+	// if args.Logs == nil || len(args.Logs) <= 0 {
+	// 	return
+	// }
 
 	// Rule 2: Reply false if log doesn’t contain an entry at prevLogIndex whose term matches prevLogTerm
 	if prevLog := rf.logs.Get(args.PrevLogIndex); prevLog == nil || prevLog.Term != args.PrevLogTerm {
@@ -61,20 +61,23 @@ func (rf *Raft) AppendEntries(args *AppendEntriesArgs, reply *AppendEntriesReply
 	// Rule 3: If an existing entry conflicts with a new one (same index but different terms),
 	// delete the existing entry and all that follow it
 	i := 0
-	for ; i <= rf.logs.LastIndex(); i++ {
+	for ; i <= args.Logs.LastIndex(); i++ {
+		// The log at prevLogIndex is the same as leader, we should check the logs after prevLogIndex
 		index := i + args.PrevLogIndex + 1
-		entry := args.Logs[i]
-		if index <= rf.logs.LastIndex() && rf.logs.Get(index).Term != entry.Term {
+		if index > rf.logs.LastIndex() {
+			break
+		}
+		if entry := args.Logs.Get(i); rf.logs.Get(index).Term != entry.Term {
 			rf.logs = rf.logs[:index]
 			break
 		}
 	}
 
 	// Rule 4: Append any new entries not already in the log
-	for ; i < len(args.Logs); i++ {
+	for ; i <= args.Logs.LastIndex(); i++ {
 		index := i + args.PrevLogIndex + 1
-		if index >= len(rf.logs) {
-			rf.logs = append(rf.logs, args.Logs[i])
+		if index > rf.logs.LastIndex() {
+			rf.logs = append(rf.logs, args.Logs.Get(i))
 		}
 	}
 

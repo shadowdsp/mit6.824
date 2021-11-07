@@ -18,9 +18,7 @@ package raft
 //
 
 // TODO:
-// 1. 使用 nextIndex 和 matchIndex
-// 2. 补充 start 方法
-// 2. 调整日志的 index 计算方式，使用 logs.LastIndex 替代 len(rf.logs) - 1 (Done)
+// 1. 在 append_entries 中，能够在 follower 接受 heartbeat 时也更新 commit index，而不是直接返回
 
 import (
 	"context"
@@ -61,6 +59,7 @@ const (
 	electionTimeoutLowerBound = 400
 	electionTimeoutUpperBound = 600
 	rpcTimeoutLimit           = 500 * time.Millisecond
+	checkAppliedInterval      = 400 * time.Millisecond
 	rpcMethodAppendEntries    = "Raft.AppendEntries"
 	rpcMethodRequestVote      = "Raft.RequestVote"
 )
@@ -110,6 +109,10 @@ type Raft struct {
 
 	// follower election timeout timestamp
 	electionTimeoutAt time.Time
+}
+
+func (rf *Raft) isMajorityNum(num int) bool {
+	return num > len(rf.peers)/2
 }
 
 // return currentTerm and whether this server
@@ -266,7 +269,7 @@ func (rf *Raft) sendAppendEntriesWithTimeout(server int, args *AppendEntriesArgs
 func (rf *Raft) Start(command interface{}) (int, int, bool) {
 	// Your code here (2B).
 	rf.mu.Lock()
-	index := rf.logs.LastIndex()
+	index := rf.logs.LastIndex() + 1
 	term, isLeader := rf.GetState()
 	rf.mu.Unlock()
 	if !isLeader {
@@ -274,6 +277,9 @@ func (rf *Raft) Start(command interface{}) (int, int, bool) {
 	}
 
 	rf.logs = append(rf.logs, &LogEntry{Command: command, Term: rf.currentTerm})
+
+	wg := sync.WaitGroup{}
+	wg.Add(len(rf.peers) - 1)
 	for i := range rf.peers {
 		if i == rf.me {
 			continue
@@ -300,15 +306,49 @@ func (rf *Raft) Start(command interface{}) (int, int, bool) {
 				// TODO: resolve response
 				err := rf.sendAppendEntriesWithTimeout(serverID, args, reply)
 				if err != nil {
-					log.Infof(err.Error())
+					// log.Infof(err.Error())
 					continue
 				}
 				if reply.Success == false {
+					rf.mu.Lock()
+					rf.nextIndex[serverID] -= 1
+					rf.mu.Unlock()
+				} else {
+					// successfully
+					rf.mu.Lock()
+					rf.nextIndex[serverID] = rf.logs.LastIndex() + 1
+					rf.matchIndex[serverID] = rf.logs.LastIndex()
+					log.Warnf("Successfully append logs %v to server %v/%v, matchIndex: %v, nextIndex: %v", logsToAppend, serverID, rf.peers, rf.matchIndex[serverID], rf.nextIndex[serverID])
+					rf.mu.Unlock()
+					break
 				}
 			}
+			wg.Done()
 		}(i)
 	}
+	wg.Wait()
 	// start agreement
+	rf.mu.Lock()
+	updatedCommitIndex := rf.commitIndex
+	for i := range rf.peers {
+		matchIndex := rf.matchIndex[i]
+		log.Warnf("matchIndex[%v]: %v, %v", i, matchIndex, rf.commitIndex)
+		if i == rf.me || matchIndex <= rf.commitIndex {
+			continue
+		}
+		count := 0
+		for j := range rf.peers {
+			if rf.matchIndex[j] >= matchIndex {
+				count++
+			}
+		}
+		if rf.isMajorityNum(count) && rf.logs.Get(matchIndex).Term == rf.currentTerm && matchIndex > updatedCommitIndex {
+			log.Warnf("Leader updatedCommitIndex %v", updatedCommitIndex)
+			updatedCommitIndex = matchIndex
+		}
+	}
+	rf.commitIndex = updatedCommitIndex
+	rf.mu.Unlock()
 	return index, term, isLeader
 }
 
@@ -366,13 +406,12 @@ func (rf *Raft) tryConvertToCdd(ctx context.Context) {
 func (rf *Raft) initializeLeaderState() {
 	rf.state = Leader
 	for i := 0; i < len(rf.peers); i++ {
-		rf.nextIndex[i] = len(rf.logs)
+		rf.nextIndex[i] = rf.logs.LastIndex() + 1
+		rf.matchIndex[i] = 0
 	}
 }
 
 func (rf *Raft) electLeader(ctx context.Context) {
-	defer log.Debugf("[Candidate] Server %v finished", rf.me)
-
 	rf.mu.Lock()
 	if rf.state != Candidate {
 		rf.mu.Unlock()
@@ -411,7 +450,7 @@ func (rf *Raft) electLeader(ctx context.Context) {
 				reply := &RequestVoteReply{}
 				err := rf.sendRequestVoteWithTimeout(serverID, args, reply)
 				if err != nil {
-					log.Infof(err.Error())
+					// log.Infof(err.Error())
 					return
 				}
 
@@ -494,13 +533,12 @@ func (rf *Raft) sendHeartbeat(ctx context.Context) {
 			reply := &AppendEntriesReply{}
 			err := rf.sendAppendEntriesWithTimeout(serverID, args, reply)
 			if err != nil {
-				log.Infof(err.Error())
+				// log.Infof(err.Error())
 				return
 			}
 			rf.mu.Lock()
 			heartbeatNums++
 			rf.mu.Unlock()
-			log.Println("finished")
 		}(i)
 	}
 	wg.Wait()
@@ -528,6 +566,25 @@ func (rf *Raft) run(ctx context.Context) error {
 		default:
 			panic(fmt.Sprintf("Server %v is in unknown state %v", rf.me, rf.state))
 		}
+	}
+}
+
+func (rf *Raft) applyCommittedLog(ctx context.Context, applyCh chan ApplyMsg) error {
+	for {
+		time.Sleep(checkAppliedInterval)
+		rf.mu.Lock()
+		for rf.lastApplied < rf.commitIndex {
+			rf.lastApplied++
+			entry := rf.logs.Get(rf.lastApplied)
+			applyMsg := ApplyMsg{
+				CommandValid: true,
+				Command:      entry.Command,
+				CommandIndex: rf.lastApplied,
+			}
+			log.Warnf("[applyCh] Server[%v] start to apply log %+v, message %+v", rf.me, entry, applyMsg)
+			applyCh <- applyMsg
+		}
+		rf.mu.Unlock()
 	}
 }
 
@@ -569,6 +626,7 @@ func Make(peers []*labrpc.ClientEnd, me int,
 
 	ctx := context.Background()
 	go rf.run(ctx)
+	go rf.applyCommittedLog(ctx, applyCh)
 
 	return rf
 }

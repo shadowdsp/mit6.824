@@ -356,7 +356,7 @@ func (rf *Raft) Start(command interface{}) (int, int, bool) {
 	}
 	rf.commitIndex = updatedCommitIndex
 	rf.mu.Unlock()
-	log.Warnf("[Start] leader: %v, index: %v, term: %v", rf.me, index, term)
+	log.Warnf("[Start] leader: %v, index: %v, term: %v, commitIndex: %v", rf.me, index, term, rf.commitIndex)
 	return index, term, isLeader
 }
 

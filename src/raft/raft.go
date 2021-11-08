@@ -119,6 +119,8 @@ func (rf *Raft) isMajorityNum(num int) bool {
 // believes it is the leader.
 func (rf *Raft) GetState() (int, bool) {
 	// Your code here (2A).
+	rf.mu.Lock()
+	defer rf.mu.Unlock()
 	return rf.currentTerm, (rf.state == Leader)
 }
 
@@ -269,8 +271,7 @@ func (rf *Raft) sendAppendEntriesWithTimeout(server int, args *AppendEntriesArgs
 func (rf *Raft) Start(command interface{}) (int, int, bool) {
 	// Your code here (2B).
 	rf.mu.Lock()
-	index := rf.logs.LastIndex() + 1
-	term, isLeader := rf.GetState()
+	index, term, isLeader := rf.logs.LastIndex()+1, rf.currentTerm, (rf.state == Leader)
 	rf.mu.Unlock()
 	if !isLeader {
 		return index, term, isLeader
@@ -285,7 +286,7 @@ func (rf *Raft) Start(command interface{}) (int, int, bool) {
 			continue
 		}
 		go func(serverID int) {
-			for {
+			for retry := 0; retry < 10; {
 				rf.mu.Lock()
 				prevLogIndex := rf.nextIndex[serverID] - 1
 				prevLogTerm := rf.logs.Get(prevLogIndex).Term
@@ -303,10 +304,12 @@ func (rf *Raft) Start(command interface{}) (int, int, bool) {
 				}
 				rf.mu.Unlock()
 				reply := &AppendEntriesReply{}
-				// TODO: resolve response
 				err := rf.sendAppendEntriesWithTimeout(serverID, args, reply)
 				if err != nil {
 					// log.Infof(err.Error())
+					if _, ok := err.(*RpcCallTimeoutError); ok {
+						retry++
+					}
 					continue
 				}
 				if reply.Success == false {
@@ -526,7 +529,7 @@ func (rf *Raft) sendHeartbeat(ctx context.Context) {
 				LeaderID:     rf.me,
 				PrevLogTerm:  rf.logs.GetLast().Term,
 				PrevLogIndex: rf.logs.LastIndex(),
-				Logs:         nil,
+				Logs:         LogEntries{},
 				LeaderCommit: rf.commitIndex,
 			}
 			rf.mu.Unlock()

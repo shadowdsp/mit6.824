@@ -47,11 +47,6 @@ func (rf *Raft) AppendEntries(args *AppendEntriesArgs, reply *AppendEntriesReply
 	// recieved heartbeat, reset election timeout
 	rf.resetElectionTimeout()
 
-	// ==========
-	// if args.Logs == nil || len(args.Logs) <= 0 {
-	// 	return
-	// }
-
 	// Rule 2: Reply false if log doesn’t contain an entry at prevLogIndex whose term matches prevLogTerm
 	if prevLog := rf.logs.Get(args.PrevLogIndex); prevLog == nil || prevLog.Term != args.PrevLogTerm {
 		reply.Success = false

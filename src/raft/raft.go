@@ -277,7 +277,11 @@ func (rf *Raft) Start(command interface{}) (int, int, bool) {
 		return index, term, isLeader
 	}
 
+	rf.mu.Lock()
 	rf.logs = append(rf.logs, &LogEntry{Command: command, Term: rf.currentTerm})
+	rf.nextIndex[rf.me] = rf.logs.LastIndex() + 1
+	rf.matchIndex[rf.me] = rf.logs.LastIndex()
+	rf.mu.Unlock()
 
 	wg := sync.WaitGroup{}
 	wg.Add(len(rf.peers) - 1)
@@ -286,7 +290,7 @@ func (rf *Raft) Start(command interface{}) (int, int, bool) {
 			continue
 		}
 		go func(serverID int) {
-			for retry := 0; retry < 10; {
+			for retry := 0; retry < 3; {
 				rf.mu.Lock()
 				prevLogIndex := rf.nextIndex[serverID] - 1
 				prevLogTerm := rf.logs.Get(prevLogIndex).Term
@@ -336,7 +340,7 @@ func (rf *Raft) Start(command interface{}) (int, int, bool) {
 	for i := range rf.peers {
 		matchIndex := rf.matchIndex[i]
 		log.Warnf("matchIndex[%v]: %v, %v", i, matchIndex, rf.commitIndex)
-		if i == rf.me || matchIndex <= rf.commitIndex {
+		if matchIndex <= rf.commitIndex {
 			continue
 		}
 		count := 0
@@ -352,6 +356,7 @@ func (rf *Raft) Start(command interface{}) (int, int, bool) {
 	}
 	rf.commitIndex = updatedCommitIndex
 	rf.mu.Unlock()
+	log.Warnf("[Start] leader: %v, index: %v, term: %v", rf.me, index, term)
 	return index, term, isLeader
 }
 

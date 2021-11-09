@@ -18,6 +18,8 @@ type AppendEntriesReply struct {
 	Term int
 	// true if follower contained entry matching prevLogIndex and prevLogTerm
 	Success bool
+	// replication index, to update leader matchIndex
+	ReplicatedIndex int
 }
 
 // AppendEntries AppendEntries RPC handler
@@ -32,6 +34,7 @@ func (rf *Raft) AppendEntries(args *AppendEntriesArgs, reply *AppendEntriesReply
 
 	reply.Term = rf.currentTerm
 	reply.Success = true
+	reply.ReplicatedIndex = 0
 	// Rule 1: Reply false if term < currentTerm
 	if args.Term < rf.currentTerm {
 		// Leader who sends AppendEntries is out of term
@@ -80,5 +83,6 @@ func (rf *Raft) AppendEntries(args *AppendEntriesArgs, reply *AppendEntriesReply
 	if args.LeaderCommit > rf.commitIndex {
 		rf.commitIndex = min(args.LeaderCommit, rf.logs.LastIndex())
 	}
+	reply.ReplicatedIndex = rf.logs.LastIndex()
 	return
 }

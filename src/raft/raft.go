@@ -18,7 +18,8 @@ package raft
 //
 
 // TODO:
-// 1. 在 append_entries 中，能够在 follower 接受 heartbeat 时也更新 commit index，而不是直接返回
+// 1. 节点断连后领导选举飘了，有节点在 Start 接收到日志后，突然发生了领导切换，导致 matchIndex 的状态更新有问题
+// 2. 如果跟随者崩溃或者运行缓慢，再或者网络丢包，领导人会不断的重复尝试附加日志条目 RPCs （尽管已经回复了客户端）直到所有的跟随者都最终存储了所有的日志条目。
 
 import (
 	"context"
@@ -281,6 +282,7 @@ func (rf *Raft) Start(command interface{}) (int, int, bool) {
 	rf.logs = append(rf.logs, &LogEntry{Command: command, Term: rf.currentTerm})
 	rf.nextIndex[rf.me] = rf.logs.LastIndex() + 1
 	rf.matchIndex[rf.me] = rf.logs.LastIndex()
+	log.Warnf("Leader[%v] nextIndex %v, matchIndex %v", rf.me, rf.nextIndex[rf.me], rf.matchIndex[rf.me])
 	rf.mu.Unlock()
 
 	wg := sync.WaitGroup{}
@@ -323,8 +325,8 @@ func (rf *Raft) Start(command interface{}) (int, int, bool) {
 				} else {
 					// successfully
 					rf.mu.Lock()
-					rf.nextIndex[serverID] = rf.logs.LastIndex() + 1
-					rf.matchIndex[serverID] = rf.logs.LastIndex()
+					rf.nextIndex[serverID] = reply.ReplicatedIndex + 1
+					rf.matchIndex[serverID] = reply.ReplicatedIndex
 					log.Warnf("Successfully append logs %v to server %v/%v, matchIndex: %v, nextIndex: %v", logsToAppend, serverID, rf.peers, rf.matchIndex[serverID], rf.nextIndex[serverID])
 					rf.mu.Unlock()
 					break
@@ -339,7 +341,7 @@ func (rf *Raft) Start(command interface{}) (int, int, bool) {
 	updatedCommitIndex := rf.commitIndex
 	for i := range rf.peers {
 		matchIndex := rf.matchIndex[i]
-		log.Warnf("matchIndex[%v]: %v, %v", i, matchIndex, rf.commitIndex)
+		log.Warnf("server[%v]: nextIndex %v, mathIndex %v, commitIndex %v", i, rf.nextIndex[i], matchIndex, rf.commitIndex)
 		if matchIndex <= rf.commitIndex {
 			continue
 		}
@@ -482,7 +484,7 @@ func (rf *Raft) electLeader(ctx context.Context) {
 		//	  5.2. Receive the most of votes from other servers;
 		//    5.3. Once received RPC AppendEntry from leader, become follower.
 		if rf.state == Candidate && voteNums >= successVoteNums {
-			log.Infof("[Candidate] Server %v received the most vote, election success and become leader in term %v", rf.me, rf.currentTerm)
+			log.Warnf("[Candidate] Server %v received the most vote, election success and become leader in term %v", rf.me, rf.currentTerm)
 			// If election is successful
 			rf.initializeLeaderState()
 			isFinished = true
@@ -545,6 +547,10 @@ func (rf *Raft) sendHeartbeat(ctx context.Context) {
 				return
 			}
 			rf.mu.Lock()
+			if reply.Success {
+				rf.matchIndex[serverID] = reply.ReplicatedIndex
+				rf.nextIndex[serverID] = reply.ReplicatedIndex + 1
+			}
 			heartbeatNums++
 			rf.mu.Unlock()
 		}(i)

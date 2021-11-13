@@ -1,9 +1,15 @@
 package raft
 
+import "fmt"
+
 type LogEntry struct {
 	Command interface{}
 	Term    int
 	// Index   int
+}
+
+func (l *LogEntry) String() string {
+	return fmt.Sprintf("{Term:%v, Command:%v}", l.Term, l.Command)
 }
 
 type LogEntries []*LogEntry

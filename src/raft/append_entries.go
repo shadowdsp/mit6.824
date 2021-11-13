@@ -20,6 +20,8 @@ type AppendEntriesReply struct {
 	Success bool
 	// replication index, to update leader matchIndex
 	ReplicatedIndex int
+	// is leader out of date
+	OutOfDate bool
 }
 
 // AppendEntries AppendEntries RPC handler
@@ -30,15 +32,17 @@ func (rf *Raft) AppendEntries(args *AppendEntriesArgs, reply *AppendEntriesReply
 	// 2. Refresh heartbeat time.
 	rf.mu.Lock()
 	defer rf.mu.Unlock()
-	log.Debugf("[AppendEntries] Before: Server %v state: %v, currentTerm: %v,  args: %+v", rf.me, rf.state, rf.currentTerm, args)
+	log.Debugf("[AppendEntries] Before: Server %v state: %v, currentTerm: %v, prevLog: %+v, args: %+v", rf.me, rf.state, rf.currentTerm, rf.logs.Get(args.PrevLogIndex), args)
 
 	reply.Term = rf.currentTerm
 	reply.Success = true
 	reply.ReplicatedIndex = 0
+	reply.OutOfDate = false
 	// Rule 1: Reply false if term < currentTerm
 	if args.Term < rf.currentTerm {
 		// Leader who sends AppendEntries is out of term
 		reply.Success = false
+		reply.OutOfDate = true
 		return
 	}
 	if args.Term >= rf.currentTerm && rf.state == Candidate {

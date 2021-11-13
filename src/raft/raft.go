@@ -59,8 +59,8 @@ const (
 	heartbeatInterval         = 120 * time.Millisecond
 	electionTimeoutLowerBound = 400
 	electionTimeoutUpperBound = 600
-	rpcTimeoutLimit           = 500 * time.Millisecond
-	checkAppliedInterval      = 400 * time.Millisecond
+	rpcTimeoutLimit           = 300 * time.Millisecond
+	checkAppliedInterval      = 300 * time.Millisecond
 	rpcMethodAppendEntries    = "Raft.AppendEntries"
 	rpcMethodRequestVote      = "Raft.RequestVote"
 )
@@ -171,12 +171,14 @@ func (rf *Raft) readPersist(data []byte) {
 	// }
 }
 
-func (rf *Raft) checkTermOrUpdateState(term int) {
+func (rf *Raft) checkTermOrUpdateState(term int) bool {
 	if term > rf.currentTerm {
 		rf.votedFor = -1
 		rf.state = Follower
 		rf.currentTerm = term
+		return true
 	}
+	return false
 }
 
 //
@@ -209,18 +211,6 @@ func (rf *Raft) checkTermOrUpdateState(term int) {
 // the struct itself.
 //
 
-// func (rf *Raft) sendRequestVote(server int, args *RequestVoteArgs, reply *RequestVoteReply) error {
-// 	// ok := rf.peers[server].Call("Raft.RequestVote", args, reply)
-// 	err := RpcCall(rf.peers[server], rpcMethodRequestVote, args, reply)
-// 	if err != nil {
-// 		return err
-// 	}
-// 	rf.mu.Lock()
-// 	rf.checkTermOrUpdateState(reply.Term)
-// 	rf.mu.Unlock()
-// 	return nil
-// }
-
 func (rf *Raft) sendRequestVoteWithTimeout(server int, args *RequestVoteArgs, reply *RequestVoteReply) error {
 	// ok := rf.peers[server].Call("Raft.RequestVote", args, reply)
 	err := RpcCallWithTimeout(rf.peers[server], rpcMethodRequestVote, args, reply, rpcTimeoutLimit)
@@ -232,17 +222,6 @@ func (rf *Raft) sendRequestVoteWithTimeout(server int, args *RequestVoteArgs, re
 	rf.mu.Unlock()
 	return nil
 }
-
-// func (rf *Raft) sendAppendEntries(server int, args *AppendEntriesArgs, reply *AppendEntriesReply) error {
-// 	err := RpcCall(rf.peers[server], rpcMethodAppendEntries, args, reply)
-// 	if err != nil {
-// 		return err
-// 	}
-// 	rf.mu.Lock()
-// 	rf.checkTermOrUpdateState(reply.Term)
-// 	rf.mu.Unlock()
-// 	return nil
-// }
 
 func (rf *Raft) sendAppendEntriesWithTimeout(server int, args *AppendEntriesArgs, reply *AppendEntriesReply) error {
 	err := RpcCallWithTimeout(rf.peers[server], rpcMethodAppendEntries, args, reply, rpcTimeoutLimit)
@@ -282,7 +261,7 @@ func (rf *Raft) Start(command interface{}) (int, int, bool) {
 	rf.logs = append(rf.logs, &LogEntry{Command: command, Term: rf.currentTerm})
 	rf.nextIndex[rf.me] = rf.logs.LastIndex() + 1
 	rf.matchIndex[rf.me] = rf.logs.LastIndex()
-	log.Warnf("Leader[%v] nextIndex %v, matchIndex %v", rf.me, rf.nextIndex[rf.me], rf.matchIndex[rf.me])
+	log.Infof("Leader[%v] nextIndex %v, matchIndex %v", rf.me, rf.nextIndex[rf.me], rf.matchIndex[rf.me])
 	rf.mu.Unlock()
 
 	wg := sync.WaitGroup{}
@@ -294,6 +273,7 @@ func (rf *Raft) Start(command interface{}) (int, int, bool) {
 		go func(serverID int) {
 			for retry := 0; retry < 3; {
 				rf.mu.Lock()
+				log.Debugf("Follower[%v] nextIndex %v, matchIndex %v", serverID, rf.nextIndex[serverID], rf.matchIndex[serverID])
 				prevLogIndex := rf.nextIndex[serverID] - 1
 				prevLogTerm := rf.logs.Get(prevLogIndex).Term
 				logsToAppend := LogEntries{}
@@ -318,18 +298,26 @@ func (rf *Raft) Start(command interface{}) (int, int, bool) {
 					}
 					continue
 				}
-				if reply.Success == false {
+
+				if reply.OutOfDate {
 					rf.mu.Lock()
-					rf.nextIndex[serverID] -= 1
+					rf.state = Follower
 					rf.mu.Unlock()
-				} else {
+					break
+				}
+
+				if reply.Success {
 					// successfully
 					rf.mu.Lock()
 					rf.nextIndex[serverID] = reply.ReplicatedIndex + 1
 					rf.matchIndex[serverID] = reply.ReplicatedIndex
-					log.Warnf("Successfully append logs %v to server %v/%v, matchIndex: %v, nextIndex: %v", logsToAppend, serverID, rf.peers, rf.matchIndex[serverID], rf.nextIndex[serverID])
+					log.Infof("Successfully append logs %v to server %v/%v, matchIndex: %v, nextIndex: %v", logsToAppend, serverID, len(rf.peers), rf.matchIndex[serverID], rf.nextIndex[serverID])
 					rf.mu.Unlock()
 					break
+				} else {
+					rf.mu.Lock()
+					rf.nextIndex[serverID] -= 1
+					rf.mu.Unlock()
 				}
 			}
 			wg.Done()
@@ -341,7 +329,7 @@ func (rf *Raft) Start(command interface{}) (int, int, bool) {
 	updatedCommitIndex := rf.commitIndex
 	for i := range rf.peers {
 		matchIndex := rf.matchIndex[i]
-		log.Warnf("server[%v]: nextIndex %v, mathIndex %v, commitIndex %v", i, rf.nextIndex[i], matchIndex, rf.commitIndex)
+		log.Debugf("server[%v]: nextIndex %v, mathIndex %v, commitIndex %v", i, rf.nextIndex[i], matchIndex, rf.commitIndex)
 		if matchIndex <= rf.commitIndex {
 			continue
 		}
@@ -352,13 +340,13 @@ func (rf *Raft) Start(command interface{}) (int, int, bool) {
 			}
 		}
 		if rf.isMajorityNum(count) && rf.logs.Get(matchIndex).Term == rf.currentTerm && matchIndex > updatedCommitIndex {
-			log.Warnf("Leader updatedCommitIndex %v", updatedCommitIndex)
+			log.Debugf("Leader updatedCommitIndex %v", updatedCommitIndex)
 			updatedCommitIndex = matchIndex
 		}
 	}
 	rf.commitIndex = updatedCommitIndex
+	log.Debugf("[Start] leader: %v, index: %v, term: %v, commitIndex: %v", rf.me, index, term, rf.commitIndex)
 	rf.mu.Unlock()
-	log.Warnf("[Start] leader: %v, index: %v, term: %v, commitIndex: %v", rf.me, index, term, rf.commitIndex)
 	return index, term, isLeader
 }
 
@@ -404,8 +392,8 @@ func (rf *Raft) tryConvertToCdd(ctx context.Context) {
 		return
 	}
 
-	log.Debugf("[tryConvertToCdd] Server %v state: %v, term: %v, votedFor: %v", rf.me, rf.state, rf.currentTerm, rf.votedFor)
 	if rf.isElectionTimeout(ctx) {
+		log.Debugf("[tryConvertToCdd] Server %v election timeout, state: %v, term: %v, votedFor: %v", rf.me, rf.state, rf.currentTerm, rf.votedFor)
 		// If 1. not receieved heartbeat from leader before election timeout
 		//    2. not vote for other candidate.
 		// Become a candidate.
@@ -463,6 +451,9 @@ func (rf *Raft) electLeader(ctx context.Context) {
 					// log.Infof(err.Error())
 					return
 				}
+				if reply.OutOfDate {
+					return
+				}
 
 				if reply.VoteGranted {
 					rf.mu.Lock()
@@ -484,7 +475,7 @@ func (rf *Raft) electLeader(ctx context.Context) {
 		//	  5.2. Receive the most of votes from other servers;
 		//    5.3. Once received RPC AppendEntry from leader, become follower.
 		if rf.state == Candidate && voteNums >= successVoteNums {
-			log.Warnf("[Candidate] Server %v received the most vote, election success and become leader in term %v", rf.me, rf.currentTerm)
+			log.Infof("[Candidate] Server %v received the most vote, election success and become leader in term %v", rf.me, rf.currentTerm)
 			// If election is successful
 			rf.initializeLeaderState()
 			isFinished = true
@@ -512,18 +503,12 @@ func (rf *Raft) sendHeartbeat(ctx context.Context) {
 		rf.mu.Unlock()
 		return
 	}
-	if rf.isElectionTimeout(ctx) {
-		rf.state = Follower
-		rf.mu.Unlock()
-		return
-	}
 	rf.mu.Unlock()
 
 	wg := sync.WaitGroup{}
 	wg.Add(len(rf.peers) - 1)
 
 	heartbeatNums := 1
-	heartbeatSuccessLimit := len(rf.peers)/2 + 1
 	for i := range rf.peers {
 		if i == rf.me {
 			continue
@@ -546,21 +531,28 @@ func (rf *Raft) sendHeartbeat(ctx context.Context) {
 				// log.Infof(err.Error())
 				return
 			}
+			if reply.OutOfDate {
+				return
+			}
 			rf.mu.Lock()
 			if reply.Success {
 				rf.matchIndex[serverID] = reply.ReplicatedIndex
 				rf.nextIndex[serverID] = reply.ReplicatedIndex + 1
 			}
+			// if leader is not out of date, heartbeat is valid
 			heartbeatNums++
 			rf.mu.Unlock()
 		}(i)
 	}
 	wg.Wait()
+
+	rf.mu.Lock()
+	heartbeatSuccessLimit := len(rf.peers)/2 + 1
+	log.Infof("Leader %v sendHeartbeats: %v/%v", rf.me, heartbeatNums, heartbeatSuccessLimit)
 	if heartbeatNums < heartbeatSuccessLimit {
-		rf.mu.Lock()
 		rf.state = Follower
-		rf.mu.Unlock()
 	}
+	rf.mu.Unlock()
 }
 
 func (rf *Raft) run(ctx context.Context) error {
@@ -595,7 +587,7 @@ func (rf *Raft) applyCommittedLog(ctx context.Context, applyCh chan ApplyMsg) er
 				Command:      entry.Command,
 				CommandIndex: rf.lastApplied,
 			}
-			log.Warnf("[applyCh] Server[%v] start to apply log %+v, message %+v", rf.me, entry, applyMsg)
+			log.Infof("[applyCh] Server[%v] start to apply log %+v, message %+v", rf.me, entry, applyMsg)
 			applyCh <- applyMsg
 		}
 		rf.mu.Unlock()
@@ -648,8 +640,8 @@ func Make(peers []*labrpc.ClientEnd, me int,
 func init() {
 	log.SetOutput(os.Stdout)
 	// Only log the warning severity or above.
-	// log.SetLevel(log.DebugLevel)
-	log.SetLevel(log.WarnLevel)
+	log.SetLevel(log.DebugLevel)
+	// log.SetLevel(log.InfoLevel)
 	log.SetFormatter(&log.TextFormatter{
 		// DisableColors: true,
 		FullTimestamp: true,

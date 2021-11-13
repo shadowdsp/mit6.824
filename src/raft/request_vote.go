@@ -23,6 +23,8 @@ type RequestVoteReply struct {
 	Term        int
 	VoteGranted bool
 	ServerID    int
+	// is request term out of date
+	OutOfDate bool
 }
 
 //
@@ -38,7 +40,9 @@ func (rf *Raft) RequestVote(args *RequestVoteArgs, reply *RequestVoteReply) {
 	reply.ServerID = rf.me
 	reply.VoteGranted = false
 	reply.Term = rf.currentTerm
+	reply.OutOfDate = false
 	if args.Term < rf.currentTerm {
+		reply.OutOfDate = true
 		return
 	}
 	rf.checkTermOrUpdateState(args.Term)

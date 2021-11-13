@@ -60,7 +60,9 @@ const (
 	electionTimeoutLowerBound = 400
 	electionTimeoutUpperBound = 600
 	rpcTimeoutLimit           = 300 * time.Millisecond
-	checkAppliedInterval      = 300 * time.Millisecond
+	checkAppliedInterval      = 150 * time.Millisecond
+	replicateLogInterval      = 200 * time.Millisecond
+	agreeLogInterval          = 150 * time.Millisecond
 	rpcMethodAppendEntries    = "Raft.AppendEntries"
 	rpcMethodRequestVote      = "Raft.RequestVote"
 )
@@ -258,94 +260,10 @@ func (rf *Raft) Start(command interface{}) (int, int, bool) {
 	}
 
 	rf.mu.Lock()
-	rf.logs = append(rf.logs, &LogEntry{Command: command, Term: rf.currentTerm})
+	rf.logs = append(rf.logs, &LogEntry{Command: command, Term: term})
 	rf.nextIndex[rf.me] = rf.logs.LastIndex() + 1
 	rf.matchIndex[rf.me] = rf.logs.LastIndex()
 	log.Infof("Leader[%v] nextIndex %v, matchIndex %v", rf.me, rf.nextIndex[rf.me], rf.matchIndex[rf.me])
-	rf.mu.Unlock()
-
-	wg := sync.WaitGroup{}
-	wg.Add(len(rf.peers) - 1)
-	for i := range rf.peers {
-		if i == rf.me {
-			continue
-		}
-		go func(serverID int) {
-			for retry := 0; retry < 3; {
-				rf.mu.Lock()
-				log.Debugf("Follower[%v] nextIndex %v, matchIndex %v", serverID, rf.nextIndex[serverID], rf.matchIndex[serverID])
-				prevLogIndex := rf.nextIndex[serverID] - 1
-				prevLogTerm := rf.logs.Get(prevLogIndex).Term
-				logsToAppend := LogEntries{}
-				for i := prevLogIndex + 1; i <= rf.logs.LastIndex(); i++ {
-					logsToAppend = append(logsToAppend, rf.logs.Get(i))
-				}
-				args := &AppendEntriesArgs{
-					Term:         rf.currentTerm,
-					LeaderID:     rf.me,
-					PrevLogTerm:  prevLogTerm,
-					PrevLogIndex: prevLogIndex,
-					Logs:         logsToAppend,
-					LeaderCommit: rf.commitIndex,
-				}
-				rf.mu.Unlock()
-				reply := &AppendEntriesReply{}
-				err := rf.sendAppendEntriesWithTimeout(serverID, args, reply)
-				if err != nil {
-					// log.Infof(err.Error())
-					if _, ok := err.(*RpcCallTimeoutError); ok {
-						retry++
-					}
-					continue
-				}
-
-				if reply.OutOfDate {
-					rf.mu.Lock()
-					rf.state = Follower
-					rf.mu.Unlock()
-					break
-				}
-
-				if reply.Success {
-					// successfully
-					rf.mu.Lock()
-					rf.nextIndex[serverID] = reply.ReplicatedIndex + 1
-					rf.matchIndex[serverID] = reply.ReplicatedIndex
-					log.Infof("Successfully append logs %v to server %v/%v, matchIndex: %v, nextIndex: %v", logsToAppend, serverID, len(rf.peers), rf.matchIndex[serverID], rf.nextIndex[serverID])
-					rf.mu.Unlock()
-					break
-				} else {
-					rf.mu.Lock()
-					rf.nextIndex[serverID] -= 1
-					rf.mu.Unlock()
-				}
-			}
-			wg.Done()
-		}(i)
-	}
-	wg.Wait()
-	// start agreement
-	rf.mu.Lock()
-	updatedCommitIndex := rf.commitIndex
-	for i := range rf.peers {
-		matchIndex := rf.matchIndex[i]
-		log.Debugf("server[%v]: nextIndex %v, mathIndex %v, commitIndex %v", i, rf.nextIndex[i], matchIndex, rf.commitIndex)
-		if matchIndex <= rf.commitIndex {
-			continue
-		}
-		count := 0
-		for j := range rf.peers {
-			if rf.matchIndex[j] >= matchIndex {
-				count++
-			}
-		}
-		if rf.isMajorityNum(count) && rf.logs.Get(matchIndex).Term == rf.currentTerm && matchIndex > updatedCommitIndex {
-			log.Debugf("Leader updatedCommitIndex %v", updatedCommitIndex)
-			updatedCommitIndex = matchIndex
-		}
-	}
-	rf.commitIndex = updatedCommitIndex
-	log.Debugf("[Start] leader: %v, index: %v, term: %v, commitIndex: %v", rf.me, index, term, rf.commitIndex)
 	rf.mu.Unlock()
 	return index, term, isLeader
 }
@@ -496,66 +414,182 @@ func (rf *Raft) electLeader(ctx context.Context) {
 	}
 }
 
-func (rf *Raft) sendHeartbeat(ctx context.Context) {
-	time.Sleep(heartbeatInterval)
-	rf.mu.Lock()
-	if rf.state != Leader {
-		rf.mu.Unlock()
-		return
-	}
-	rf.mu.Unlock()
-
-	wg := sync.WaitGroup{}
-	wg.Add(len(rf.peers) - 1)
-
-	heartbeatNums := 1
-	for i := range rf.peers {
-		if i == rf.me {
-			continue
+func (rf *Raft) leaderSendHeartbeat() error {
+	for {
+		time.Sleep(heartbeatInterval)
+		rf.mu.Lock()
+		if rf.state != Leader {
+			rf.mu.Unlock()
+			break
 		}
-		go func(serverID int) {
-			defer wg.Done()
-			rf.mu.Lock()
-			args := &AppendEntriesArgs{
-				Term:         rf.currentTerm,
-				LeaderID:     rf.me,
-				PrevLogTerm:  rf.logs.GetLast().Term,
-				PrevLogIndex: rf.logs.LastIndex(),
-				Logs:         LogEntries{},
-				LeaderCommit: rf.commitIndex,
-			}
-			rf.mu.Unlock()
-			reply := &AppendEntriesReply{}
-			err := rf.sendAppendEntriesWithTimeout(serverID, args, reply)
-			if err != nil {
-				// log.Infof(err.Error())
-				return
-			}
-			if reply.OutOfDate {
-				return
-			}
-			rf.mu.Lock()
-			if reply.Success {
-				rf.matchIndex[serverID] = reply.ReplicatedIndex
-				rf.nextIndex[serverID] = reply.ReplicatedIndex + 1
-			}
-			// if leader is not out of date, heartbeat is valid
-			heartbeatNums++
-			rf.mu.Unlock()
-		}(i)
-	}
-	wg.Wait()
+		rf.mu.Unlock()
 
-	rf.mu.Lock()
-	heartbeatSuccessLimit := len(rf.peers)/2 + 1
-	log.Infof("Leader %v sendHeartbeats: %v/%v", rf.me, heartbeatNums, heartbeatSuccessLimit)
-	if heartbeatNums < heartbeatSuccessLimit {
-		rf.state = Follower
+		wg := sync.WaitGroup{}
+		wg.Add(len(rf.peers) - 1)
+
+		heartbeatNums := 1
+		for i := range rf.peers {
+			if i == rf.me {
+				continue
+			}
+			go func(serverID int) {
+				defer wg.Done()
+				rf.mu.Lock()
+				args := &AppendEntriesArgs{
+					Term:         rf.currentTerm,
+					LeaderID:     rf.me,
+					PrevLogTerm:  rf.logs.GetLast().Term,
+					PrevLogIndex: rf.logs.LastIndex(),
+					Logs:         LogEntries{},
+					LeaderCommit: rf.commitIndex,
+				}
+				rf.mu.Unlock()
+				reply := &AppendEntriesReply{}
+				err := rf.sendAppendEntriesWithTimeout(serverID, args, reply)
+				if err != nil {
+					// log.Infof(err.Error())
+					return
+				}
+				if reply.OutOfDate {
+					return
+				}
+				rf.mu.Lock()
+				if reply.Success {
+					rf.matchIndex[serverID] = reply.ReplicatedIndex
+					rf.nextIndex[serverID] = reply.ReplicatedIndex + 1
+				}
+				// if leader is not out of date, heartbeat is valid
+				heartbeatNums++
+				rf.mu.Unlock()
+			}(i)
+		}
+		wg.Wait()
+
+		rf.mu.Lock()
+		heartbeatSuccessLimit := len(rf.peers)/2 + 1
+		if heartbeatNums < heartbeatSuccessLimit {
+			log.Infof("Leader %v sendHeartbeats failed: %v/%v, and become Follower", rf.me, heartbeatNums, heartbeatSuccessLimit)
+			rf.state = Follower
+		}
+		rf.mu.Unlock()
 	}
-	rf.mu.Unlock()
+	return nil
+}
+
+func (rf *Raft) leaderReplicateLog() error {
+	for {
+		time.Sleep(replicateLogInterval)
+		rf.mu.Lock()
+		if rf.state != Leader {
+			rf.mu.Unlock()
+			break
+		}
+		rf.mu.Unlock()
+
+		for i := range rf.peers {
+			if i == rf.me {
+				continue
+			}
+
+			rf.mu.Lock()
+			if len(rf.logs) < rf.nextIndex[i] {
+				rf.mu.Unlock()
+				continue
+			}
+			rf.mu.Unlock()
+
+			go func(serverID int) {
+				for retry := 0; retry < 3; {
+					rf.mu.Lock()
+					// log.Debugf("Follower[%v] nextIndex %v, matchIndex %v", serverID, rf.nextIndex[serverID], rf.matchIndex[serverID])
+					prevLogIndex := rf.nextIndex[serverID] - 1
+					prevLogTerm := rf.logs.Get(prevLogIndex).Term
+					logsToAppend := LogEntries{}
+					for i := prevLogIndex + 1; i <= rf.logs.LastIndex(); i++ {
+						logsToAppend = append(logsToAppend, rf.logs.Get(i))
+					}
+					args := &AppendEntriesArgs{
+						Term:         rf.currentTerm,
+						LeaderID:     rf.me,
+						PrevLogTerm:  prevLogTerm,
+						PrevLogIndex: prevLogIndex,
+						Logs:         logsToAppend,
+						LeaderCommit: rf.commitIndex,
+					}
+					rf.mu.Unlock()
+					reply := &AppendEntriesReply{}
+					err := rf.sendAppendEntriesWithTimeout(serverID, args, reply)
+					if err != nil {
+						// log.Infof(err.Error())
+						if _, ok := err.(*RpcCallTimeoutError); ok {
+							retry++
+						}
+						continue
+					}
+
+					if reply.OutOfDate {
+						rf.mu.Lock()
+						rf.state = Follower
+						rf.mu.Unlock()
+						break
+					}
+
+					if reply.Success {
+						// successfully
+						rf.mu.Lock()
+						rf.nextIndex[serverID] = reply.ReplicatedIndex + 1
+						rf.matchIndex[serverID] = reply.ReplicatedIndex
+						log.Infof("Successfully append logs %v to server %v/%v, matchIndex: %v, nextIndex: %v", logsToAppend, serverID, len(rf.peers), rf.matchIndex[serverID], rf.nextIndex[serverID])
+						rf.mu.Unlock()
+						break
+					} else {
+						rf.mu.Lock()
+						rf.nextIndex[serverID] -= 1
+						rf.mu.Unlock()
+					}
+				}
+			}(i)
+		}
+	}
+	return nil
+}
+
+func (rf *Raft) leaderAgreeLog() error {
+	for {
+		time.Sleep(agreeLogInterval)
+		rf.mu.Lock()
+		if rf.state != Leader {
+			rf.mu.Unlock()
+			break
+		}
+
+		updatedCommitIndex := rf.commitIndex
+		for i := range rf.peers {
+			matchIndex := rf.matchIndex[i]
+			log.Debugf("server[%v]: nextIndex %v, matchIndex %v, commitIndex %v", i, rf.nextIndex[i], matchIndex, rf.commitIndex)
+			if matchIndex <= rf.commitIndex {
+				continue
+			}
+			count := 0
+			for j := range rf.peers {
+				if rf.matchIndex[j] >= matchIndex {
+					count++
+				}
+			}
+			if rf.isMajorityNum(count) && rf.logs.Get(matchIndex).Term == rf.currentTerm && matchIndex > updatedCommitIndex {
+				log.Debugf("Leader updatedCommitIndex %v", updatedCommitIndex)
+				updatedCommitIndex = matchIndex
+			}
+		}
+		rf.commitIndex = updatedCommitIndex
+		log.Debugf("[leaderAgreeLog] leader: %v, commitIndex: %v, term: %v, lastApplied: %v", rf.me, rf.commitIndex, rf.logs.Get(rf.commitIndex).Term, rf.lastApplied)
+		rf.mu.Unlock()
+	}
+	return nil
 }
 
 func (rf *Raft) run(ctx context.Context) error {
+	var prevState State = ""
 	for {
 		time.Sleep(10 * time.Millisecond)
 		state := rf.getState()
@@ -567,11 +601,20 @@ func (rf *Raft) run(ctx context.Context) error {
 			rf.electLeader(ctx)
 			break
 		case Leader:
-			rf.sendHeartbeat(ctx)
+			if prevState == state {
+				break
+			}
+			go rf.leaderSendHeartbeat()
+			go rf.leaderReplicateLog()
+			go rf.leaderAgreeLog()
 			break
 		default:
 			panic(fmt.Sprintf("Server %v is in unknown state %v", rf.me, rf.state))
 		}
+
+		rf.mu.Lock()
+		prevState = state
+		rf.mu.Unlock()
 	}
 }
 
@@ -640,7 +683,7 @@ func Make(peers []*labrpc.ClientEnd, me int,
 func init() {
 	log.SetOutput(os.Stdout)
 	// Only log the warning severity or above.
-	log.SetLevel(log.DebugLevel)
+	log.SetLevel(log.WarnLevel)
 	// log.SetLevel(log.InfoLevel)
 	log.SetFormatter(&log.TextFormatter{
 		// DisableColors: true,

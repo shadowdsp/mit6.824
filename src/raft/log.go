@@ -17,7 +17,7 @@ type LogEntries []*LogEntry
 func (le LogEntries) LastIndex() int { return len(le) - 1 }
 
 func (le LogEntries) Get(i int) *LogEntry {
-	if i <= le.LastIndex() {
+	if 0 <= i && i <= le.LastIndex() {
 		return le[i]
 	}
 	return nil

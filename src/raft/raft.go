@@ -324,6 +324,7 @@ func (rf *Raft) initializeLeaderState() {
 	for i := 0; i < len(rf.peers); i++ {
 		rf.nextIndex[i] = rf.logs.LastIndex() + 1
 		rf.matchIndex[i] = 0
+		log.Warnf("[initializeLeaderState] server[%v]: nextIndex: %v", i, rf.nextIndex[i])
 	}
 }
 
@@ -501,8 +502,10 @@ func (rf *Raft) leaderReplicateLog() error {
 			go func(serverID int) {
 				for retry := 0; retry < 3; {
 					rf.mu.Lock()
-					// log.Debugf("Follower[%v] nextIndex %v, matchIndex %v", serverID, rf.nextIndex[serverID], rf.matchIndex[serverID])
 					prevLogIndex := rf.nextIndex[serverID] - 1
+					if prevLogIndex <= 0 {
+						log.Warnf("Follower[%v] nextIndex %v, matchIndex %v", serverID, rf.nextIndex[serverID], rf.matchIndex[serverID])
+					}
 					prevLogTerm := rf.logs.Get(prevLogIndex).Term
 					logsToAppend := LogEntries{}
 					for i := prevLogIndex + 1; i <= rf.logs.LastIndex(); i++ {
@@ -539,11 +542,12 @@ func (rf *Raft) leaderReplicateLog() error {
 						rf.mu.Lock()
 						rf.nextIndex[serverID] = reply.ReplicatedIndex + 1
 						rf.matchIndex[serverID] = reply.ReplicatedIndex
-						log.Infof("Successfully append logs %v to server %v/%v, matchIndex: %v, nextIndex: %v", logsToAppend, serverID, len(rf.peers), rf.matchIndex[serverID], rf.nextIndex[serverID])
+						log.Warnf("Successfully append logs %v to server %v/%v, matchIndex: %v, nextIndex: %v", logsToAppend, serverID, len(rf.peers), rf.matchIndex[serverID], rf.nextIndex[serverID])
 						rf.mu.Unlock()
 						break
 					} else {
 						rf.mu.Lock()
+						log.Warnf("Failed to append logs %v to server %v/%v, matchIndex: %v, nextIndex: %v", logsToAppend, serverID, len(rf.peers), rf.matchIndex[serverID], rf.nextIndex[serverID])
 						rf.nextIndex[serverID] -= 1
 						rf.mu.Unlock()
 					}
@@ -656,7 +660,7 @@ func Make(peers []*labrpc.ClientEnd, me int,
 		me:          me,
 		state:       Follower,
 		votedFor:    -1,
-		logs:        LogEntries{},
+		logs:        LogEntries{&LogEntry{Command: nil, Term: -1}},
 		currentTerm: 0,
 
 		// volatile state on servers
@@ -667,7 +671,6 @@ func Make(peers []*labrpc.ClientEnd, me int,
 		nextIndex:  make([]int, len(peers)),
 		matchIndex: make([]int, len(peers)),
 	}
-	rf.logs = append(rf.logs, &LogEntry{Command: nil, Term: -1})
 	// Your initialization code here (2A, 2B, 2C).
 
 	// initialize from state persisted before a crash

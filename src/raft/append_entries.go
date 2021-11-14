@@ -56,6 +56,7 @@ func (rf *Raft) AppendEntries(args *AppendEntriesArgs, reply *AppendEntriesReply
 
 	// Rule 2: Reply false if log doesn’t contain an entry at prevLogIndex whose term matches prevLogTerm
 	if prevLog := rf.logs.Get(args.PrevLogIndex); prevLog == nil || prevLog.Term != args.PrevLogTerm {
+		log.Warnf("[AppendEntries] Failed to append entries to Server[%d], args: %+v, rf.logs: %+v", rf.me, args, rf.logs)
 		reply.Success = false
 		return
 	}

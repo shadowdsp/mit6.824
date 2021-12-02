@@ -443,13 +443,11 @@ func (rf *Raft) updateState(state State) {
 
 	log.Infof("[updateState] server[%v] term: %v, old state: %v, new state: %v", rf.me, rf.currentTerm, rf.state, state)
 	if state == Leader {
-		if state != rf.state {
-			for i := 0; i < len(rf.peers); i++ {
-				rf.nextIndex[i] = rf.logs.LastIndex() + 1
-				rf.matchIndex[i] = 0
-			}
-			rf.heartbeatMap = make(map[int]bool, 0)
+		for i := 0; i < len(rf.peers); i++ {
+			rf.nextIndex[i] = rf.logs.LastIndex() + 1
+			rf.matchIndex[i] = 0
 		}
+		rf.heartbeatMap = make(map[int]bool, 0)
 		rf.resetHeatbeatTimer()
 		rf.electionTimer.Stop()
 	} else {
@@ -465,14 +463,22 @@ func (rf *Raft) procEvent() {
 	oldState := rf.state
 	rf.mu.Unlock()
 	for {
+		if rf.killed() {
+			break
+		}
 		select {
 		case <-rf.electionTimer.C:
 			rf.mu.Lock()
 			rf.updateState(Candidate)
 			rf.mu.Unlock()
-			return
+			break
 		case <-rf.heartbeatTimer.C:
-			return
+			if rf.state == Leader {
+				rf.sendHeartbeat()
+				rf.resetHeatbeatTimer()
+			} else {
+				break
+			}
 		case req := <-rf.RequestCh:
 			switch req.Args.(type) {
 			case *RequestVoteArgs:
@@ -502,6 +508,10 @@ func (rf *Raft) procEvent() {
 
 func (rf *Raft) run() error {
 	for {
+		if rf.killed() {
+			time.Sleep(heartbeatInterval)
+			break
+		}
 		state := rf.getState()
 		switch state {
 		case Candidate:
@@ -513,6 +523,7 @@ func (rf *Raft) run() error {
 		}
 		rf.procEvent()
 	}
+	return nil
 }
 
 func (rf *Raft) applyCommittedLog(applyCh chan ApplyMsg) error {

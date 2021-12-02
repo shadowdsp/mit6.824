@@ -23,8 +23,6 @@ type RequestVoteReply struct {
 	Term        int
 	VoteGranted bool
 	ServerID    int
-	// is request term out of date
-	OutOfDate bool
 }
 
 //
@@ -32,20 +30,28 @@ type RequestVoteReply struct {
 //
 func (rf *Raft) RequestVote(args *RequestVoteArgs, reply *RequestVoteReply) {
 	// Your code here (2A, 2B).
+	rf.RequestCh <- Request{
+		Name:  rpcMethodRequestVote,
+		Args:  args,
+		Reply: reply,
+	}
+	log.Debugf("[RequestVote] Server %v received args: %v", rf.me, args)
+	<-rf.RequestDone[RequestNameIDMapping[rpcMethodRequestVote]]
+}
+
+func (rf *Raft) handleRequestVoteRequest(args *RequestVoteArgs, reply *RequestVoteReply) {
 	rf.mu.Lock()
 	defer rf.mu.Unlock()
 
-	log.Debugf("[RequestVote] Start: Server %v state: %v, currentTerm: %v, voteFor: %v,  args: %+v,", rf.me, rf.state, rf.currentTerm, rf.votedFor, args)
+	log.Debugf("[handleRequestVoteRequest] Start: Server %v state: %v, currentTerm: %v, voteFor: %v,  args: %+v,", rf.me, rf.state, rf.currentTerm, rf.votedFor, args)
 
 	reply.ServerID = rf.me
 	reply.VoteGranted = false
 	reply.Term = rf.currentTerm
-	reply.OutOfDate = false
 	if args.Term < rf.currentTerm {
-		reply.OutOfDate = true
 		return
 	}
-	rf.checkTermOrUpdateState(args.Term)
+	rf.isTermOutdateAndUpdateState(args.Term)
 	reply.Term = rf.currentTerm
 	if rf.votedFor == -1 || rf.votedFor == args.CandidateID {
 		// Make sure candidate is as up to date as follower
@@ -55,9 +61,26 @@ func (rf *Raft) RequestVote(args *RequestVoteArgs, reply *RequestVoteReply) {
 		if commitLog := rf.logs.Get(rf.commitIndex); args.LastLogTerm > commitLog.Term || args.LastLogTerm == commitLog.Term && args.LastLogIndex >= rf.logs.LastIndex() {
 			reply.VoteGranted = true
 			rf.votedFor = args.CandidateID
-			rf.resetElectionTimeout()
+			rf.resetElectionTimer()
 		}
 	}
-	log.Debugf("[RequestVote] Finish: Server %v state: %v, currentTerm: %v, voteFor: %v,  args: %+v,", rf.me, rf.state, rf.currentTerm, rf.votedFor, args)
-	return
+	log.Debugf("[handleRequestVoteRequest] Finish: Server %v state: %v, currentTerm: %v, voteFor: %v,  args: %+v,", rf.me, rf.state, rf.currentTerm, rf.votedFor, args)
+}
+
+func (rf *Raft) handleRequestVoteReply(reply *RequestVoteReply) {
+	rf.mu.Lock()
+	defer rf.mu.Unlock()
+	log.Infof("[handleRequestVoteReply] Server %v received reply: %+v, voteNums: %v, currentTerm: %v", rf.me, reply, rf.voteNums, rf.currentTerm)
+	if rf.isTermOutdateAndUpdateState(reply.Term) {
+		return
+	}
+
+	if reply.VoteGranted {
+		rf.voteNums++
+	}
+	log.Debugf("[handleRequestVoteReply] Server %v voteNums: %v/%v, isMajorityNum: %v", rf.me, rf.voteNums, len(rf.peers), rf.isMajorityNum(rf.voteNums))
+
+	if rf.isMajorityNum(rf.voteNums) {
+		rf.updateState(Leader)
+	}
 }

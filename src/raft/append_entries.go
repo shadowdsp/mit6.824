@@ -20,13 +20,22 @@ type AppendEntriesReply struct {
 	Success bool
 	// replication index, to update leader matchIndex
 	ReplicatedIndex int
-	// is leader out of date
-	OutOfDate bool
+	// ServerID
+	ServerID int
 }
 
 // AppendEntries AppendEntries RPC handler
 // Invoked by leader to replicate log entries (§5.3); also used as heartbeat
 func (rf *Raft) AppendEntries(args *AppendEntriesArgs, reply *AppendEntriesReply) {
+	rf.RequestCh <- Request{
+		Name:  rpcMethodAppendEntries,
+		Args:  args,
+		Reply: reply,
+	}
+	<-rf.RequestDone[RequestNameIDMapping[rpcMethodAppendEntries]]
+}
+
+func (rf *Raft) handleAppendEntriesRequest(args *AppendEntriesArgs, reply *AppendEntriesReply) {
 	// If receive AppendEntries from leader:
 	// 1. The server should become the follower, and stop leader election.
 	// 2. Refresh heartbeat time.
@@ -37,26 +46,25 @@ func (rf *Raft) AppendEntries(args *AppendEntriesArgs, reply *AppendEntriesReply
 	reply.Term = rf.currentTerm
 	reply.Success = true
 	reply.ReplicatedIndex = 0
-	reply.OutOfDate = false
+	reply.ServerID = rf.me
 	// Rule 1: Reply false if term < currentTerm
 	if args.Term < rf.currentTerm {
 		// Leader who sends AppendEntries is out of term
 		reply.Success = false
-		reply.OutOfDate = true
 		return
 	}
-	if args.Term >= rf.currentTerm && rf.state == Candidate {
-		// received heartbeat, stop voting and change state to Follower
-		rf.state = Follower
-	}
-	rf.checkTermOrUpdateState(args.Term)
+	// if args.Term >= rf.currentTerm && rf.state == Candidate {
+	// 	// received heartbeat, stop voting and change state to Follower
+	// 	rf.state = Follower
+	// }
+	rf.isTermOutdateAndUpdateState(args.Term)
 	reply.Term = rf.currentTerm
 	// recieved heartbeat, reset election timeout
-	rf.resetElectionTimeout()
+	rf.resetElectionTimer()
 
 	// Rule 2: Reply false if log doesn’t contain an entry at prevLogIndex whose term matches prevLogTerm
 	if prevLog := rf.logs.Get(args.PrevLogIndex); prevLog == nil || prevLog.Term != args.PrevLogTerm {
-		log.Warnf("[AppendEntries] Failed to append entries to Server[%d], args: %+v, rf.logs: %+v", rf.me, args, rf.logs)
+		log.Infof("[AppendEntries] Failed to append entries to Server[%d], args: %+v, rf.logs: %+v", rf.me, args, rf.logs)
 		reply.Success = false
 		return
 	}
@@ -89,5 +97,20 @@ func (rf *Raft) AppendEntries(args *AppendEntriesArgs, reply *AppendEntriesReply
 		rf.commitIndex = min(args.LeaderCommit, rf.logs.LastIndex())
 	}
 	reply.ReplicatedIndex = rf.logs.LastIndex()
-	return
+}
+
+func (rf *Raft) handleAppendEntriesReply(reply *AppendEntriesReply) {
+	rf.mu.Lock()
+	defer rf.mu.Unlock()
+	if rf.isTermOutdateAndUpdateState(reply.Term) {
+		return
+	}
+	rf.heartbeatMap[reply.ServerID] = true
+
+	if !reply.Success {
+		rf.nextIndex[reply.ServerID]--
+		return
+	}
+	rf.nextIndex[reply.ServerID] = reply.ReplicatedIndex + 1
+	rf.matchIndex[reply.ServerID] = reply.ReplicatedIndex
 }

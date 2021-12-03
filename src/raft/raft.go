@@ -330,7 +330,7 @@ func (rf *Raft) electLeader() {
 	rf.votedFor = rf.me
 	rf.voteNums = 1
 	// 3. Reset election timer;
-	rf.resetElectionTimer()
+	// rf.resetElectionTimer()
 
 	log.Debugf("[electLeader] Server %v start election, state: %v, term: %v", rf.me, rf.state, rf.currentTerm)
 	rf.mu.Unlock()
@@ -431,9 +431,6 @@ func (rf *Raft) sendHeartbeat() {
 // }
 
 func (rf *Raft) updateState(state State) {
-	// rf.mu.Lock()
-	// defer rf.mu.Unlock()
-
 	if rf.electionTimer == nil {
 		rf.electionTimer = time.NewTimer(rf.getElectionTimeout())
 	}
@@ -464,20 +461,21 @@ func (rf *Raft) procEvent() {
 	rf.mu.Unlock()
 	for {
 		if rf.killed() {
-			break
+			log.Debugf("Server[%d] was killed", rf.me)
+			return
 		}
 		select {
 		case <-rf.electionTimer.C:
 			rf.mu.Lock()
 			rf.updateState(Candidate)
 			rf.mu.Unlock()
-			break
+			return
 		case <-rf.heartbeatTimer.C:
 			if rf.state == Leader {
 				rf.sendHeartbeat()
 				rf.resetHeatbeatTimer()
 			} else {
-				break
+				return
 			}
 		case req := <-rf.RequestCh:
 			switch req.Args.(type) {
@@ -501,7 +499,7 @@ func (rf *Raft) procEvent() {
 		isSame := (oldTerm != rf.currentTerm || oldState != rf.state)
 		rf.mu.Unlock()
 		if !isSame {
-			break
+			return
 		}
 	}
 }
@@ -509,10 +507,12 @@ func (rf *Raft) procEvent() {
 func (rf *Raft) run() error {
 	for {
 		if rf.killed() {
+			log.Debugf("Server[%d] was killed", rf.me)
 			time.Sleep(heartbeatInterval)
-			break
+			return nil
 		}
 		state := rf.getState()
+		log.Infof("[run] Server[%d] term: %v, state: %v", rf.me, rf.currentTerm, state)
 		switch state {
 		case Candidate:
 			rf.electLeader()
@@ -523,7 +523,6 @@ func (rf *Raft) run() error {
 		}
 		rf.procEvent()
 	}
-	return nil
 }
 
 func (rf *Raft) applyCommittedLog(applyCh chan ApplyMsg) error {
@@ -580,7 +579,6 @@ func Make(peers []*labrpc.ClientEnd, me int,
 		RequestDone: make([]chan struct{}, len(RequestNameIDMapping)),
 	}
 	for i := range rf.RequestDone {
-		log.Debugf("Initialize rf.RequestDone[%v]", i)
 		rf.RequestDone[i] = make(chan struct{})
 	}
 	// Your initialization code here (2A, 2B, 2C).

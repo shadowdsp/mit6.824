@@ -24,6 +24,7 @@ package raft
 import (
 	"math/rand"
 	"os"
+	"reflect"
 	"sync"
 	"sync/atomic"
 	"time"
@@ -112,9 +113,9 @@ type Raft struct {
 	// Persistent state on server
 	currentTerm int
 	// votedFor initial state is -1
-	votedFor     int
-	voteNums     int
-	heartbeatMap map[int]bool
+	votedFor int
+	voteNums int
+	// heartbeatMap map[int]bool
 
 	// start from index 1, will append an emtpy log at first
 	logs LogEntries
@@ -135,6 +136,7 @@ type Raft struct {
 	RequestCh   chan Request
 	ReplyCh     chan Reply
 	RequestDone []chan struct{}
+	// stateChange chan struct{}
 }
 
 func (rf *Raft) isMajorityNum(num int) bool {
@@ -198,6 +200,7 @@ func (rf *Raft) isTermOutdateAndUpdateState(term int) bool {
 	if term > rf.currentTerm {
 		rf.updateState(Follower)
 		rf.votedFor = -1
+		rf.voteNums = 0
 		rf.currentTerm = term
 		return true
 	}
@@ -330,7 +333,7 @@ func (rf *Raft) electLeader() {
 	rf.votedFor = rf.me
 	rf.voteNums = 1
 	// 3. Reset election timer;
-	// rf.resetElectionTimer()
+	rf.resetElectionTimer()
 
 	log.Debugf("[electLeader] Server %v start election, state: %v, term: %v", rf.me, rf.state, rf.currentTerm)
 	rf.mu.Unlock()
@@ -366,6 +369,8 @@ func (rf *Raft) sendHeartbeat() {
 		if serverID == rf.me {
 			continue
 		}
+
+		log.Debugf("[heartbeat] Leader %v sendHeartbeat to server %v", rf.me, serverID)
 		rf.mu.Lock()
 		prevLogIndex := rf.nextIndex[serverID] - 1
 		if prevLogIndex <= 0 {
@@ -438,13 +443,16 @@ func (rf *Raft) updateState(state State) {
 		rf.heartbeatTimer = time.NewTimer(heartbeatInterval)
 	}
 
-	log.Infof("[updateState] server[%v] term: %v, old state: %v, new state: %v", rf.me, rf.currentTerm, rf.state, state)
+	if rf.state == state {
+		return
+	}
+	log.Infof("[updateState] server %v term: %v, old state: %v, new state: %v", rf.me, rf.currentTerm, rf.state, state)
 	if state == Leader {
 		for i := 0; i < len(rf.peers); i++ {
 			rf.nextIndex[i] = rf.logs.LastIndex() + 1
 			rf.matchIndex[i] = 0
 		}
-		rf.heartbeatMap = make(map[int]bool, 0)
+		// rf.heartbeatMap = make(map[int]bool, 0)
 		rf.resetHeatbeatTimer()
 		rf.electionTimer.Stop()
 	} else {
@@ -454,14 +462,46 @@ func (rf *Raft) updateState(state State) {
 	rf.state = state
 }
 
+func (rf *Raft) handleEvent() {
+	for {
+		if rf.killed() {
+			log.Debugf("Server %d was killed", rf.me)
+			return
+		}
+		log.Debugf("[handleEvent] handling event")
+		select {
+		case req := <-rf.RequestCh:
+			log.Debugf("[handleEvent] handling request event, type: %v", reflect.TypeOf(req.Args))
+			switch req.Args.(type) {
+			case *RequestVoteArgs:
+				rf.handleRequestVoteRequest(req.Args.(*RequestVoteArgs), req.Reply.(*RequestVoteReply))
+			case *AppendEntriesArgs:
+				rf.handleAppendEntriesRequest(req.Args.(*AppendEntriesArgs), req.Reply.(*AppendEntriesReply))
+			}
+			log.Debugf("[handleEvent] Server %v request not done, detail: %v", rf.me, req)
+			rf.RequestDone[req.GetID()] <- struct{}{}
+			log.Debugf("[handleEvent] Server %v request done, detail: %v", rf.me, req)
+		case reply := <-rf.ReplyCh:
+			log.Debugf("[handleEvent] handling reply event, type: %v", reflect.TypeOf(reply))
+			switch reply.(type) {
+			case *RequestVoteReply:
+				rf.handleRequestVoteReply(reply.(*RequestVoteReply))
+			case *AppendEntriesReply:
+				rf.handleAppendEntriesReply(reply.(*AppendEntriesReply))
+			}
+		}
+	}
+}
+
 func (rf *Raft) procEvent() {
 	rf.mu.Lock()
 	oldTerm := rf.currentTerm
 	oldState := rf.state
 	rf.mu.Unlock()
 	for {
+		// time.Sleep(10 * time.Millisecond)
 		if rf.killed() {
-			log.Debugf("Server[%d] was killed", rf.me)
+			log.Debugf("Server %d was killed", rf.me)
 			return
 		}
 		select {
@@ -471,29 +511,17 @@ func (rf *Raft) procEvent() {
 			rf.mu.Unlock()
 			return
 		case <-rf.heartbeatTimer.C:
-			if rf.state == Leader {
+			rf.mu.Lock()
+			state := rf.state
+			rf.mu.Unlock()
+			if state == Leader {
 				rf.sendHeartbeat()
 				rf.resetHeatbeatTimer()
 			} else {
 				return
 			}
-		case req := <-rf.RequestCh:
-			switch req.Args.(type) {
-			case *RequestVoteArgs:
-				rf.handleRequestVoteRequest(req.Args.(*RequestVoteArgs), req.Reply.(*RequestVoteReply))
-			case *AppendEntriesArgs:
-				rf.handleAppendEntriesRequest(req.Args.(*AppendEntriesArgs), req.Reply.(*AppendEntriesReply))
-			}
-			log.Debugf("[procEvent] Server[%v] request not done, detail: %v", rf.me, req)
-			rf.RequestDone[req.GetID()] <- struct{}{}
-			log.Debugf("[procEvent] Server[%v] request done, detail: %v", rf.me, req)
-		case reply := <-rf.ReplyCh:
-			switch reply.(type) {
-			case *RequestVoteReply:
-				rf.handleRequestVoteReply(reply.(*RequestVoteReply))
-			case *AppendEntriesReply:
-				rf.handleAppendEntriesReply(reply.(*AppendEntriesReply))
-			}
+			// case <-rf.stateChange:
+			// 	break
 		}
 		rf.mu.Lock()
 		isSame := (oldTerm != rf.currentTerm || oldState != rf.state)
@@ -507,12 +535,12 @@ func (rf *Raft) procEvent() {
 func (rf *Raft) run() error {
 	for {
 		if rf.killed() {
-			log.Debugf("Server[%d] was killed", rf.me)
+			log.Debugf("Server %d was killed", rf.me)
 			time.Sleep(heartbeatInterval)
 			return nil
 		}
 		state := rf.getState()
-		log.Infof("[run] Server[%d] term: %v, state: %v", rf.me, rf.currentTerm, state)
+		log.Infof("[run] Server %d term: %v, state: %v, timestamp: %v", rf.me, rf.currentTerm, state, time.Now().UnixNano())
 		switch state {
 		case Candidate:
 			rf.electLeader()
@@ -537,7 +565,7 @@ func (rf *Raft) applyCommittedLog(applyCh chan ApplyMsg) error {
 				Command:      entry.Command,
 				CommandIndex: rf.lastApplied,
 			}
-			log.Infof("[applyCh] Server[%v] start to apply log %+v, message %+v", rf.me, entry, applyMsg)
+			log.Infof("[applyCh] Server %v start to apply log %+v, message %+v", rf.me, entry, applyMsg)
 			applyCh <- applyMsg
 		}
 		rf.mu.Unlock()
@@ -574,9 +602,10 @@ func Make(peers []*labrpc.ClientEnd, me int,
 		nextIndex:  make([]int, len(peers)),
 		matchIndex: make([]int, len(peers)),
 
-		RequestCh:   make(chan Request),
-		ReplyCh:     make(chan Reply),
+		RequestCh:   make(chan Request, 100),
+		ReplyCh:     make(chan Reply, 100),
 		RequestDone: make([]chan struct{}, len(RequestNameIDMapping)),
+		// stateChange: make(chan struct{}),
 	}
 	for i := range rf.RequestDone {
 		rf.RequestDone[i] = make(chan struct{})
@@ -588,6 +617,7 @@ func Make(peers []*labrpc.ClientEnd, me int,
 
 	rf.updateState(Follower)
 	go rf.run()
+	go rf.handleEvent()
 	// go rf.applyCommittedLog(applyCh)
 
 	return rf
@@ -607,5 +637,5 @@ func init() {
 		FullTimestamp: true,
 	})
 
-	// go startPprofServer()
+	go startPprofServer()
 }

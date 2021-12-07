@@ -64,7 +64,7 @@ func (rf *Raft) handleAppendEntriesRequest(args *AppendEntriesArgs, reply *Appen
 
 	// Rule 2: Reply false if log doesn’t contain an entry at prevLogIndex whose term matches prevLogTerm
 	if prevLog := rf.logs.Get(args.PrevLogIndex); prevLog == nil || prevLog.Term != args.PrevLogTerm {
-		log.Infof("[AppendEntries] Failed to append entries to Server[%d], args: %+v, rf.logs: %+v", rf.me, args, rf.logs)
+		log.Infof("[AppendEntries] Failed to append entries to Server %d, args: %+v, rf.logs: %+v", rf.me, args, rf.logs)
 		reply.Success = false
 		return
 	}
@@ -105,7 +105,7 @@ func (rf *Raft) handleAppendEntriesReply(reply *AppendEntriesReply) {
 	if rf.isTermOutdateAndUpdateState(reply.Term) {
 		return
 	}
-	rf.heartbeatMap[reply.ServerID] = true
+	// rf.heartbeatMap[reply.ServerID] = true
 
 	if !reply.Success {
 		rf.nextIndex[reply.ServerID]--

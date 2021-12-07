@@ -1,6 +1,10 @@
 package raft
 
-import log "github.com/sirupsen/logrus"
+import (
+	"time"
+
+	log "github.com/sirupsen/logrus"
+)
 
 //
 // example RequestVote RPC arguments structure.
@@ -35,7 +39,7 @@ func (rf *Raft) RequestVote(args *RequestVoteArgs, reply *RequestVoteReply) {
 		Args:  args,
 		Reply: reply,
 	}
-	log.Debugf("[RequestVote] Server %v received args: %v", rf.me, args)
+	log.Debugf("[RequestVote] Server %v received args: %+v", rf.me, args)
 	<-rf.RequestDone[RequestNameIDMapping[rpcMethodRequestVote]]
 }
 
@@ -43,12 +47,13 @@ func (rf *Raft) handleRequestVoteRequest(args *RequestVoteArgs, reply *RequestVo
 	rf.mu.Lock()
 	defer rf.mu.Unlock()
 
-	log.Debugf("[handleRequestVoteRequest] Start: Server %v state: %v, currentTerm: %v, voteFor: %v,  args: %+v,", rf.me, rf.state, rf.currentTerm, rf.votedFor, args)
+	log.Infof("[handleRequestVoteRequest] Start: Server %v state: %v, currentTerm: %v, voteFor: %v,  args: %+v, timestamp: %v", rf.me, rf.state, rf.currentTerm, rf.votedFor, args, time.Now().UnixNano())
 
 	reply.ServerID = rf.me
 	reply.VoteGranted = false
 	reply.Term = rf.currentTerm
 	if args.Term < rf.currentTerm {
+		// request is out of date
 		return
 	}
 	rf.isTermOutdateAndUpdateState(args.Term)
@@ -64,7 +69,7 @@ func (rf *Raft) handleRequestVoteRequest(args *RequestVoteArgs, reply *RequestVo
 			rf.resetElectionTimer()
 		}
 	}
-	log.Debugf("[handleRequestVoteRequest] Finish: Server %v state: %v, currentTerm: %v, voteFor: %v,  args: %+v,", rf.me, rf.state, rf.currentTerm, rf.votedFor, args)
+	log.Infof("[handleRequestVoteRequest] Finish: Server %v state: %v, currentTerm: %v, voteFor: %v,  args: %+v,", rf.me, rf.state, rf.currentTerm, rf.votedFor, args)
 }
 
 func (rf *Raft) handleRequestVoteReply(reply *RequestVoteReply) {
@@ -78,7 +83,7 @@ func (rf *Raft) handleRequestVoteReply(reply *RequestVoteReply) {
 	if reply.VoteGranted {
 		rf.voteNums++
 	}
-	log.Debugf("[handleRequestVoteReply] Server %v voteNums: %v/%v, isMajorityNum: %v", rf.me, rf.voteNums, len(rf.peers), rf.isMajorityNum(rf.voteNums))
+	log.Infof("[handleRequestVoteReply] Server %v voteNums: %v/%v, isMajorityNum: %v", rf.me, rf.voteNums, len(rf.peers), rf.isMajorityNum(rf.voteNums))
 
 	if rf.isMajorityNum(rf.voteNums) {
 		rf.updateState(Leader)

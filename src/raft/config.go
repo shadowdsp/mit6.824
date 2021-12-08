@@ -222,7 +222,7 @@ func (cfg *config) checkTimeout() {
 	// enforce a two minute real-time limit on each test
 	// we have more test case, so change timeout from 120s to 1200s
 	if !cfg.t.Failed() && time.Since(cfg.start) > 1200*time.Second {
-		cfg.t.Fatal("test took longer than 120 seconds")
+		cfg.t.Fatal("test took longer than 1200 seconds")
 	}
 }
 

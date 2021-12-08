@@ -105,7 +105,6 @@ func (rf *Raft) handleAppendEntriesReply(reply *AppendEntriesReply) {
 	if rf.isTermOutdateAndUpdateState(reply.Term) {
 		return
 	}
-	// rf.heartbeatMap[reply.ServerID] = true
 
 	if !reply.Success {
 		rf.nextIndex[reply.ServerID]--
@@ -113,4 +112,24 @@ func (rf *Raft) handleAppendEntriesReply(reply *AppendEntriesReply) {
 	}
 	rf.nextIndex[reply.ServerID] = reply.ReplicatedIndex + 1
 	rf.matchIndex[reply.ServerID] = reply.ReplicatedIndex
+
+	updatedCommitIndex := rf.commitIndex
+	for i := range rf.peers {
+		matchIndex := rf.matchIndex[i]
+		log.Debugf("server[%v]: nextIndex %v, matchIndex %v, commitIndex %v", i, rf.nextIndex[i], matchIndex, rf.commitIndex)
+		if matchIndex <= rf.commitIndex {
+			continue
+		}
+		count := 0
+		for j := range rf.peers {
+			if rf.matchIndex[j] >= matchIndex {
+				count++
+			}
+		}
+		if rf.isMajorityNum(count) && rf.logs.Get(matchIndex).Term == rf.currentTerm && matchIndex > updatedCommitIndex {
+			log.Debugf("Leader updatedCommitIndex %v", updatedCommitIndex)
+			updatedCommitIndex = matchIndex
+		}
+	}
+	rf.commitIndex = updatedCommitIndex
 }

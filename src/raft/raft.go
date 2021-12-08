@@ -73,7 +73,7 @@ const (
 	heartbeatInterval         = 120 * time.Millisecond
 	electionTimeoutLowerBound = 400
 	electionTimeoutUpperBound = 600
-	rpcTimeoutLimit           = 1000 * time.Millisecond
+	rpcTimeoutLimit           = 500 * time.Millisecond
 	checkAppliedInterval      = 150 * time.Millisecond
 	replicateLogInterval      = 200 * time.Millisecond
 	agreeLogInterval          = 150 * time.Millisecond
@@ -115,7 +115,6 @@ type Raft struct {
 	// votedFor initial state is -1
 	votedFor int
 	voteNums int
-	// heartbeatMap map[int]bool
 
 	// start from index 1, will append an emtpy log at first
 	logs LogEntries
@@ -324,6 +323,15 @@ func (rf *Raft) resetHeatbeatTimer() {
 	rf.heartbeatTimer.Reset(heartbeatInterval)
 }
 
+func (rf *Raft) stopTimer(timer *time.Timer) {
+	if !timer.Stop() {
+		select {
+		case <-timer.C:
+		default:
+		}
+	}
+}
+
 func (rf *Raft) electLeader() {
 	// Candidate start leader election.
 	rf.mu.Lock()
@@ -442,22 +450,25 @@ func (rf *Raft) updateState(state State) {
 	if rf.heartbeatTimer == nil {
 		rf.heartbeatTimer = time.NewTimer(heartbeatInterval)
 	}
-
 	if rf.state == state {
 		return
 	}
+
 	log.Infof("[updateState] server %v term: %v, old state: %v, new state: %v", rf.me, rf.currentTerm, rf.state, state)
 	if state == Leader {
 		for i := 0; i < len(rf.peers); i++ {
 			rf.nextIndex[i] = rf.logs.LastIndex() + 1
 			rf.matchIndex[i] = 0
 		}
-		// rf.heartbeatMap = make(map[int]bool, 0)
 		rf.resetHeatbeatTimer()
-		rf.electionTimer.Stop()
-	} else {
+		rf.stopTimer(rf.electionTimer)
+	} else if state == Candidate {
+		rf.stopTimer(rf.heartbeatTimer)
+	} else if state == Follower {
 		rf.resetElectionTimer()
-		rf.heartbeatTimer.Stop()
+		rf.stopTimer(rf.heartbeatTimer)
+	} else {
+		log.Fatalf("[updateState] Unkown state: %v", state)
 	}
 	rf.state = state
 }
@@ -499,9 +510,10 @@ func (rf *Raft) procEvent() {
 	oldState := rf.state
 	rf.mu.Unlock()
 	for {
-		// time.Sleep(10 * time.Millisecond)
 		if rf.killed() {
-			log.Debugf("Server %d was killed", rf.me)
+			log.Warnf("Server %d was killed", rf.me)
+			rf.stopTimer(rf.electionTimer)
+			rf.stopTimer(rf.heartbeatTimer)
 			return
 		}
 		select {
@@ -520,8 +532,6 @@ func (rf *Raft) procEvent() {
 			} else {
 				return
 			}
-			// case <-rf.stateChange:
-			// 	break
 		}
 		rf.mu.Lock()
 		isSame := (oldTerm != rf.currentTerm || oldState != rf.state)
@@ -532,15 +542,17 @@ func (rf *Raft) procEvent() {
 	}
 }
 
-func (rf *Raft) run() error {
+func (rf *Raft) run() {
 	for {
 		if rf.killed() {
-			log.Debugf("Server %d was killed", rf.me)
+			log.Warnf("Server %d was killed", rf.me)
 			time.Sleep(heartbeatInterval)
-			return nil
+			return
 		}
 		state := rf.getState()
+		rf.mu.Lock()
 		log.Infof("[run] Server %d term: %v, state: %v, timestamp: %v", rf.me, rf.currentTerm, state, time.Now().UnixNano())
+		rf.mu.Unlock()
 		switch state {
 		case Candidate:
 			rf.electLeader()
@@ -605,7 +617,6 @@ func Make(peers []*labrpc.ClientEnd, me int,
 		RequestCh:   make(chan Request, 100),
 		ReplyCh:     make(chan Reply, 100),
 		RequestDone: make([]chan struct{}, len(RequestNameIDMapping)),
-		// stateChange: make(chan struct{}),
 	}
 	for i := range rf.RequestDone {
 		rf.RequestDone[i] = make(chan struct{})
@@ -618,7 +629,7 @@ func Make(peers []*labrpc.ClientEnd, me int,
 	rf.updateState(Follower)
 	go rf.run()
 	go rf.handleEvent()
-	// go rf.applyCommittedLog(applyCh)
+	go rf.applyCommittedLog(applyCh)
 
 	return rf
 }
@@ -632,10 +643,11 @@ func init() {
 	// Only log the warning severity or above.
 	log.SetLevel(log.DebugLevel)
 	log.SetLevel(log.InfoLevel)
+	log.SetLevel(log.WarnLevel)
 	log.SetFormatter(&log.TextFormatter{
 		// DisableColors: true,
 		FullTimestamp: true,
 	})
 
-	go startPprofServer()
+	// go startPprofServer()
 }

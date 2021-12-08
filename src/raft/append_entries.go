@@ -53,10 +53,6 @@ func (rf *Raft) handleAppendEntriesRequest(args *AppendEntriesArgs, reply *Appen
 		reply.Success = false
 		return
 	}
-	// if args.Term >= rf.currentTerm && rf.state == Candidate {
-	// 	// received heartbeat, stop voting and change state to Follower
-	// 	rf.state = Follower
-	// }
 	rf.isTermOutdateAndUpdateState(args.Term)
 	reply.Term = rf.currentTerm
 	// recieved heartbeat, reset election timeout
@@ -71,26 +67,29 @@ func (rf *Raft) handleAppendEntriesRequest(args *AppendEntriesArgs, reply *Appen
 
 	// Rule 3: If an existing entry conflicts with a new one (same index but different terms),
 	// delete the existing entry and all that follow it
+	// Rule 4: Append any new entries not already in the log
 	i := 0
 	for ; i <= args.Logs.LastIndex(); i++ {
 		// The log at prevLogIndex is the same as leader, we should check the logs after prevLogIndex
 		index := i + args.PrevLogIndex + 1
-		if index > rf.logs.LastIndex() {
-			break
-		}
-		if entry := args.Logs.Get(i); rf.logs.Get(index).Term != entry.Term {
+		if entry := rf.logs.Get(index); entry != nil && entry.Term != args.Logs.Get(i).Term {
 			rf.logs = rf.logs[:index]
-			break
+			// break
+		}
+		if index > rf.logs.LastIndex() {
+			rf.logs = append(rf.logs, args.Logs.Get(i))
+		} else {
+			rf.logs[index] = args.Logs.Get(i)
 		}
 	}
 
 	// Rule 4: Append any new entries not already in the log
-	for ; i <= args.Logs.LastIndex(); i++ {
-		index := i + args.PrevLogIndex + 1
-		if index > rf.logs.LastIndex() {
-			rf.logs = append(rf.logs, args.Logs.Get(i))
-		}
-	}
+	// for ; i <= args.Logs.LastIndex(); i++ {
+	// 	index := i + args.PrevLogIndex + 1
+	// 	if index > rf.logs.LastIndex() {
+	// 		rf.logs = append(rf.logs, args.Logs.Get(i))
+	// 	}
+	// }
 
 	// Rule 5: If leaderCommit > commitIndex, set commitIndex = min(leaderCommit, index of last new entry)
 	if args.LeaderCommit > rf.commitIndex {
@@ -107,7 +106,9 @@ func (rf *Raft) handleAppendEntriesReply(reply *AppendEntriesReply) {
 	}
 
 	if !reply.Success {
-		rf.nextIndex[reply.ServerID]--
+		if rf.nextIndex[reply.ServerID] > 0 {
+			rf.nextIndex[reply.ServerID]--
+		}
 		return
 	}
 	rf.nextIndex[reply.ServerID] = reply.ReplicatedIndex + 1

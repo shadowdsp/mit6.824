@@ -74,7 +74,7 @@ const (
 	electionTimeoutLowerBound = 400
 	electionTimeoutUpperBound = 600
 	rpcTimeoutLimit           = 500 * time.Millisecond
-	checkAppliedInterval      = 150 * time.Millisecond
+	checkAppliedInterval      = 50 * time.Millisecond
 	replicateLogInterval      = 200 * time.Millisecond
 	agreeLogInterval          = 150 * time.Millisecond
 	rpcMethodAppendEntries    = "Raft.AppendEntries"
@@ -409,40 +409,6 @@ func (rf *Raft) sendHeartbeat() {
 	}
 }
 
-// func (rf *Raft) leaderAgreeLog() error {
-// 	for {
-// 		time.Sleep(agreeLogInterval)
-// 		rf.mu.Lock()
-// 		if rf.state != Leader {
-// 			rf.mu.Unlock()
-// 			break
-// 		}
-
-// 		updatedCommitIndex := rf.commitIndex
-// 		for i := range rf.peers {
-// 			matchIndex := rf.matchIndex[i]
-// 			log.Debugf("server[%v]: nextIndex %v, matchIndex %v, commitIndex %v", i, rf.nextIndex[i], matchIndex, rf.commitIndex)
-// 			if matchIndex <= rf.commitIndex {
-// 				continue
-// 			}
-// 			count := 0
-// 			for j := range rf.peers {
-// 				if rf.matchIndex[j] >= matchIndex {
-// 					count++
-// 				}
-// 			}
-// 			if rf.isMajorityNum(count) && rf.logs.Get(matchIndex).Term == rf.currentTerm && matchIndex > updatedCommitIndex {
-// 				log.Debugf("Leader updatedCommitIndex %v", updatedCommitIndex)
-// 				updatedCommitIndex = matchIndex
-// 			}
-// 		}
-// 		rf.commitIndex = updatedCommitIndex
-// 		log.Debugf("[leaderAgreeLog] leader: %v, commitIndex: %v, term: %v, lastApplied: %v", rf.me, rf.commitIndex, rf.logs.Get(rf.commitIndex).Term, rf.lastApplied)
-// 		rf.mu.Unlock()
-// 	}
-// 	return nil
-// }
-
 func (rf *Raft) updateState(state State) {
 	if rf.electionTimer == nil {
 		rf.electionTimer = time.NewTimer(rf.getElectionTimeout())
@@ -643,7 +609,7 @@ func init() {
 	// Only log the warning severity or above.
 	log.SetLevel(log.DebugLevel)
 	log.SetLevel(log.InfoLevel)
-	log.SetLevel(log.WarnLevel)
+	// log.SetLevel(log.WarnLevel)
 	log.SetFormatter(&log.TextFormatter{
 		// DisableColors: true,
 		FullTimestamp: true,

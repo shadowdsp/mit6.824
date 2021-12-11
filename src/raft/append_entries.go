@@ -22,6 +22,8 @@ type AppendEntriesReply struct {
 	ReplicatedIndex int
 	// ServerID
 	ServerID int
+	// log inconsistency
+	LogInconsistent bool
 }
 
 // AppendEntries AppendEntries RPC handler
@@ -41,12 +43,14 @@ func (rf *Raft) handleAppendEntriesRequest(args *AppendEntriesArgs, reply *Appen
 	// 2. Refresh heartbeat time.
 	rf.mu.Lock()
 	defer rf.mu.Unlock()
-	log.Debugf("[AppendEntries] Before: Server %v state: %v, currentTerm: %v, prevLog: %+v, args: %+v", rf.me, rf.state, rf.currentTerm, rf.logs.Get(args.PrevLogIndex), args)
+	log.Debugf("[handleAppendEntriesRequest] Before: Server %v state: %v, currentTerm: %v, prevLog: %+v, args: %+v",
+		rf.me, rf.state, rf.currentTerm, rf.logs.Get(args.PrevLogIndex), args)
 
 	reply.Term = rf.currentTerm
 	reply.Success = true
 	reply.ReplicatedIndex = 0
 	reply.ServerID = rf.me
+	reply.LogInconsistent = false
 	// Rule 1: Reply false if term < currentTerm
 	if args.Term < rf.currentTerm {
 		// Leader who sends AppendEntries is out of term
@@ -60,42 +64,32 @@ func (rf *Raft) handleAppendEntriesRequest(args *AppendEntriesArgs, reply *Appen
 
 	// Rule 2: Reply false if log doesn’t contain an entry at prevLogIndex whose term matches prevLogTerm
 	if prevLog := rf.logs.Get(args.PrevLogIndex); prevLog == nil || prevLog.Term != args.PrevLogTerm {
-		log.Infof("[AppendEntries] Failed to append entries to Server %d, args: %+v, rf.logs: %+v", rf.me, args, rf.logs)
 		reply.Success = false
+		reply.LogInconsistent = true
 		return
 	}
 
 	// Rule 3: If an existing entry conflicts with a new one (same index but different terms),
 	// delete the existing entry and all that follow it
 	// Rule 4: Append any new entries not already in the log
-	i := 0
-	for ; i <= args.Logs.LastIndex(); i++ {
+	for i := range args.Logs {
 		// The log at prevLogIndex is the same as leader, we should check the logs after prevLogIndex
 		index := i + args.PrevLogIndex + 1
 		if entry := rf.logs.Get(index); entry != nil && entry.Term != args.Logs.Get(i).Term {
 			rf.logs = rf.logs[:index]
-			// break
 		}
 		if index > rf.logs.LastIndex() {
 			rf.logs = append(rf.logs, args.Logs.Get(i))
-		} else {
-			rf.logs[index] = args.Logs.Get(i)
 		}
 	}
-
-	// Rule 4: Append any new entries not already in the log
-	// for ; i <= args.Logs.LastIndex(); i++ {
-	// 	index := i + args.PrevLogIndex + 1
-	// 	if index > rf.logs.LastIndex() {
-	// 		rf.logs = append(rf.logs, args.Logs.Get(i))
-	// 	}
-	// }
 
 	// Rule 5: If leaderCommit > commitIndex, set commitIndex = min(leaderCommit, index of last new entry)
 	if args.LeaderCommit > rf.commitIndex {
 		rf.commitIndex = min(args.LeaderCommit, rf.logs.LastIndex())
 	}
-	reply.ReplicatedIndex = rf.logs.LastIndex()
+	rf.apply()
+
+	reply.ReplicatedIndex = args.PrevLogIndex + len(args.Logs)
 }
 
 func (rf *Raft) handleAppendEntriesReply(reply *AppendEntriesReply) {
@@ -106,31 +100,31 @@ func (rf *Raft) handleAppendEntriesReply(reply *AppendEntriesReply) {
 	}
 
 	if !reply.Success {
-		if rf.nextIndex[reply.ServerID] > 0 {
-			rf.nextIndex[reply.ServerID]--
+		if reply.LogInconsistent {
+			if rf.nextIndex[reply.ServerID] > 0 {
+				rf.nextIndex[reply.ServerID]--
+			} else {
+				log.Infof("[handleAppendEntriesReply] Abnormal nextIndex, Leader %v, Server %v, reply %+v", rf.me, reply.ServerID, reply)
+			}
 		}
 		return
 	}
 	rf.nextIndex[reply.ServerID] = reply.ReplicatedIndex + 1
 	rf.matchIndex[reply.ServerID] = reply.ReplicatedIndex
 
-	updatedCommitIndex := rf.commitIndex
-	for i := range rf.peers {
-		matchIndex := rf.matchIndex[i]
-		log.Debugf("server[%v]: nextIndex %v, matchIndex %v, commitIndex %v", i, rf.nextIndex[i], matchIndex, rf.commitIndex)
-		if matchIndex <= rf.commitIndex {
-			continue
-		}
-		count := 0
-		for j := range rf.peers {
-			if rf.matchIndex[j] >= matchIndex {
-				count++
-			}
-		}
-		if rf.isMajorityNum(count) && rf.logs.Get(matchIndex).Term == rf.currentTerm && matchIndex > updatedCommitIndex {
-			log.Debugf("Leader updatedCommitIndex %v", updatedCommitIndex)
-			updatedCommitIndex = matchIndex
+	// Try to update leader commit index
+	matchIndex := rf.matchIndex[reply.ServerID]
+	log.Debugf("[handleAppendEntriesReply] Server %v: nextIndex %v, matchIndex %v, commitIndex %v",
+		reply.ServerID, rf.nextIndex[reply.ServerID], matchIndex, rf.commitIndex)
+	count := 0
+	for j := range rf.peers {
+		if rf.matchIndex[j] >= matchIndex {
+			count++
 		}
 	}
-	rf.commitIndex = updatedCommitIndex
+	if rf.isMajorityNum(count) && rf.logs.Get(matchIndex).Term == rf.currentTerm && matchIndex > rf.commitIndex {
+		log.Debugf("Leader updatedCommitIndex %v", matchIndex)
+		rf.commitIndex = matchIndex
+	}
+	rf.apply()
 }

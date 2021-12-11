@@ -73,10 +73,7 @@ const (
 	heartbeatInterval         = 120 * time.Millisecond
 	electionTimeoutLowerBound = 400
 	electionTimeoutUpperBound = 600
-	rpcTimeoutLimit           = 500 * time.Millisecond
-	checkAppliedInterval      = 50 * time.Millisecond
-	replicateLogInterval      = 200 * time.Millisecond
-	agreeLogInterval          = 150 * time.Millisecond
+	rpcTimeoutLimit           = 50 * time.Millisecond
 	rpcMethodAppendEntries    = "Raft.AppendEntries"
 	rpcMethodRequestVote      = "Raft.RequestVote"
 )
@@ -135,7 +132,8 @@ type Raft struct {
 	RequestCh   chan Request
 	ReplyCh     chan Reply
 	RequestDone []chan struct{}
-	// stateChange chan struct{}
+
+	applyCh chan ApplyMsg
 }
 
 func (rf *Raft) isMajorityNum(num int) bool {
@@ -262,18 +260,16 @@ func (rf *Raft) sendAppendEntriesWithTimeout(server int, args *AppendEntriesArgs
 func (rf *Raft) Start(command interface{}) (int, int, bool) {
 	// Your code here (2B).
 	rf.mu.Lock()
+	defer rf.mu.Unlock()
+
 	index, term, isLeader := rf.logs.LastIndex()+1, rf.currentTerm, (rf.state == Leader)
-	rf.mu.Unlock()
 	if !isLeader {
 		return index, term, isLeader
 	}
 
-	rf.mu.Lock()
 	rf.logs = append(rf.logs, &LogEntry{Command: command, Term: term})
 	rf.nextIndex[rf.me] = rf.logs.LastIndex() + 1
 	rf.matchIndex[rf.me] = rf.logs.LastIndex()
-	log.Infof("Leader[%v] nextIndex %v, matchIndex %v", rf.me, rf.nextIndex[rf.me], rf.matchIndex[rf.me])
-	rf.mu.Unlock()
 	return index, term, isLeader
 }
 
@@ -381,9 +377,6 @@ func (rf *Raft) sendHeartbeat() {
 		log.Debugf("[heartbeat] Leader %v sendHeartbeat to server %v", rf.me, serverID)
 		rf.mu.Lock()
 		prevLogIndex := rf.nextIndex[serverID] - 1
-		if prevLogIndex <= 0 {
-			log.Debugf("Follower[%v] nextIndex %v, matchIndex %v", serverID, rf.nextIndex[serverID], rf.matchIndex[serverID])
-		}
 		prevLogTerm := rf.logs.Get(prevLogIndex).Term
 		logsToAppend := LogEntries{}
 		for i := prevLogIndex + 1; i <= rf.logs.LastIndex(); i++ {
@@ -401,7 +394,6 @@ func (rf *Raft) sendHeartbeat() {
 		reply := &AppendEntriesReply{}
 		go func(serverID int) {
 			if err := rf.sendAppendEntriesWithTimeout(serverID, args, reply); err != nil {
-				// log.Warnf("[sendAppendEntriesWithTimeout] err: %v", err)
 				return
 			}
 			rf.ReplyCh <- reply
@@ -531,22 +523,18 @@ func (rf *Raft) run() {
 	}
 }
 
-func (rf *Raft) applyCommittedLog(applyCh chan ApplyMsg) error {
-	for {
-		time.Sleep(checkAppliedInterval)
-		rf.mu.Lock()
-		for rf.lastApplied < rf.commitIndex {
-			rf.lastApplied++
-			entry := rf.logs.Get(rf.lastApplied)
-			applyMsg := ApplyMsg{
-				CommandValid: true,
-				Command:      entry.Command,
-				CommandIndex: rf.lastApplied,
-			}
-			log.Infof("[applyCh] Server %v start to apply log %+v, message %+v", rf.me, entry, applyMsg)
-			applyCh <- applyMsg
+func (rf *Raft) apply() {
+	for rf.lastApplied < rf.commitIndex {
+		index := rf.lastApplied + 1
+		entry := rf.logs.Get(index)
+		applyMsg := ApplyMsg{
+			CommandValid: true,
+			Command:      entry.Command,
+			CommandIndex: index,
 		}
-		rf.mu.Unlock()
+		log.Infof("[applyCh] Server %v start to apply log %+v, message %+v", rf.me, entry, applyMsg)
+		rf.applyCh <- applyMsg
+		rf.lastApplied++
 	}
 }
 
@@ -575,6 +563,7 @@ func Make(peers []*labrpc.ClientEnd, me int,
 		// volatile state on servers
 		commitIndex: 0,
 		lastApplied: 0,
+		applyCh:     applyCh,
 
 		// volatile state on leaders
 		nextIndex:  make([]int, len(peers)),
@@ -595,7 +584,6 @@ func Make(peers []*labrpc.ClientEnd, me int,
 	rf.updateState(Follower)
 	go rf.run()
 	go rf.handleEvent()
-	go rf.applyCommittedLog(applyCh)
 
 	return rf
 }

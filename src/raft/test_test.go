@@ -153,7 +153,7 @@ func TestRPCBytes2B(t *testing.T) {
 }
 
 func TestFailAgree2B(t *testing.T) {
-	for round := 0; round < 25; round++ {
+	for round := 0; round < 15; round++ {
 		servers := 3
 		cfg := make_config(t, servers, false)
 		defer cfg.cleanup()
@@ -383,7 +383,7 @@ func TestRejoin2B(t *testing.T) {
 
 func TestBackup2B(t *testing.T) {
 	servers := 5
-	for round := 0; round < 25; round++ {
+	for round := 0; round < 15; round++ {
 		cfg := make_config(t, servers, false)
 		defer cfg.cleanup()
 

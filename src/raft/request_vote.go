@@ -47,7 +47,8 @@ func (rf *Raft) handleRequestVoteRequest(args *RequestVoteArgs, reply *RequestVo
 	rf.mu.Lock()
 	defer rf.mu.Unlock()
 
-	log.Infof("[handleRequestVoteRequest] Start: Server %v state: %v, currentTerm: %v, voteFor: %v,  args: %+v, timestamp: %v", rf.me, rf.state, rf.currentTerm, rf.votedFor, args, time.Now().UnixNano())
+	log.Infof("[handleRequestVoteRequest] Start: Server %v state: %v, commitIndex: %v, lastLogIndex: %v, currentTerm: %v, voteFor: %v,  args: %+v, timestamp: %v",
+		rf.me, rf.state, rf.commitIndex, rf.logs.LastIndex(), rf.currentTerm, rf.votedFor, args, time.Now().UnixNano())
 
 	reply.ServerID = rf.me
 	reply.VoteGranted = false

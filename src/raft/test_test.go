@@ -383,7 +383,7 @@ func TestRejoin2B(t *testing.T) {
 
 func TestBackup2B(t *testing.T) {
 	servers := 5
-	for round := 0; round < 15; round++ {
+	for round := 0; round < 13; round++ {
 		cfg := make_config(t, servers, false)
 		defer cfg.cleanup()
 
@@ -636,7 +636,9 @@ func TestPersist22C(t *testing.T) {
 		cfg.disconnect((leader1 + 3) % servers)
 		cfg.disconnect((leader1 + 4) % servers)
 
+		fmt.Printf("Start Raft %v", (leader1+1)%servers)
 		cfg.start1((leader1 + 1) % servers)
+		fmt.Printf("Start Raft %v", (leader1+2)%servers)
 		cfg.start1((leader1 + 2) % servers)
 		cfg.connect((leader1 + 1) % servers)
 		cfg.connect((leader1 + 2) % servers)

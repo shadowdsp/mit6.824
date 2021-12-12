@@ -51,6 +51,7 @@ func (rf *Raft) handleAppendEntriesRequest(args *AppendEntriesArgs, reply *Appen
 	reply.ReplicatedIndex = 0
 	reply.ServerID = rf.me
 	reply.LogInconsistent = false
+
 	// Rule 1: Reply false if term < currentTerm
 	if args.Term < rf.currentTerm {
 		// Leader who sends AppendEntries is out of term
@@ -68,6 +69,8 @@ func (rf *Raft) handleAppendEntriesRequest(args *AppendEntriesArgs, reply *Appen
 		reply.LogInconsistent = true
 		return
 	}
+	// Here we don't use rf.logs.LastIndex(), because follower's last log index can be bigger than leader's.
+	reply.ReplicatedIndex = args.PrevLogIndex + len(args.Logs)
 
 	// Rule 3: If an existing entry conflicts with a new one (same index but different terms),
 	// delete the existing entry and all that follow it
@@ -80,6 +83,8 @@ func (rf *Raft) handleAppendEntriesRequest(args *AppendEntriesArgs, reply *Appen
 		}
 		if index > rf.logs.LastIndex() {
 			rf.logs = append(rf.logs, args.Logs.Get(i))
+		} else {
+			rf.logs[index] = args.Logs.Get(i)
 		}
 	}
 
@@ -87,9 +92,8 @@ func (rf *Raft) handleAppendEntriesRequest(args *AppendEntriesArgs, reply *Appen
 	if args.LeaderCommit > rf.commitIndex {
 		rf.commitIndex = min(args.LeaderCommit, rf.logs.LastIndex())
 	}
+	rf.persist()
 	rf.apply()
-
-	reply.ReplicatedIndex = args.PrevLogIndex + len(args.Logs)
 }
 
 func (rf *Raft) handleAppendEntriesReply(reply *AppendEntriesReply) {
@@ -101,11 +105,7 @@ func (rf *Raft) handleAppendEntriesReply(reply *AppendEntriesReply) {
 
 	if !reply.Success {
 		if reply.LogInconsistent {
-			if rf.nextIndex[reply.ServerID] > 0 {
-				rf.nextIndex[reply.ServerID]--
-			} else {
-				log.Infof("[handleAppendEntriesReply] Abnormal nextIndex, Leader %v, Server %v, reply %+v", rf.me, reply.ServerID, reply)
-			}
+			rf.nextIndex[reply.ServerID]--
 		}
 		return
 	}
@@ -126,5 +126,6 @@ func (rf *Raft) handleAppendEntriesReply(reply *AppendEntriesReply) {
 		log.Debugf("Leader updatedCommitIndex %v", matchIndex)
 		rf.commitIndex = matchIndex
 	}
+	rf.persist()
 	rf.apply()
 }

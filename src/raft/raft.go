@@ -17,11 +17,8 @@ package raft
 //   in the same server.
 //
 
-// TODO:
-// 1. 节点断连后领导选举飘了，有节点在 Start 接收到日志后，突然发生了领导切换，导致 matchIndex 的状态更新有问题
-// 2. 如果跟随者崩溃或者运行缓慢，再或者网络丢包，领导人会不断的重复尝试附加日志条目 RPCs （尽管已经回复了客户端）直到所有的跟随者都最终存储了所有的日志条目。
-
 import (
+	"bytes"
 	"math/rand"
 	"os"
 	"reflect"
@@ -29,6 +26,7 @@ import (
 	"sync/atomic"
 	"time"
 
+	"mit6.824/src/labgob"
 	"mit6.824/src/labrpc"
 
 	"net/http"
@@ -163,34 +161,56 @@ func (rf *Raft) getState() State {
 func (rf *Raft) persist() {
 	// Your code here (2C).
 	// Example:
-	// w := new(bytes.Buffer)
-	// e := labgob.NewEncoder(w)
-	// e.Encode(rf.xxx)
-	// e.Encode(rf.yyy)
-	// data := w.Bytes()
-	// rf.persister.SaveRaftState(data)
+	w := new(bytes.Buffer)
+	e := labgob.NewEncoder(w)
+	if err := e.Encode(rf.currentTerm); err != nil {
+		log.Warnf("[persist] Failed to encode currentTerm: %v", err)
+	}
+	if err := e.Encode(rf.votedFor); err != nil {
+		log.Warnf("[persist] Failed to encode votedFor: %v", err)
+	}
+	if err := e.Encode(rf.logs); err != nil {
+		log.Warnf("[persist] Failed to encode logs: %v", err)
+	}
+	data := w.Bytes()
+	rf.persister.SaveRaftState(data)
+	// log.Infof("[persist] Server[%v] persist state, term: %v, commitIndex: %v, log: %+v",
+	// 	rf.me, rf.currentTerm, rf.commitIndex, rf.logs)
 }
 
 //
 // restore previously persisted state.
 //
 func (rf *Raft) readPersist(data []byte) {
+	rf.mu.Lock()
+	defer rf.mu.Unlock()
+
 	if data == nil || len(data) < 1 { // bootstrap without any state?
 		return
 	}
 	// Your code here (2C).
 	// Example:
-	// r := bytes.NewBuffer(data)
-	// d := labgob.NewDecoder(r)
-	// var xxx
-	// var yyy
-	// if d.Decode(&xxx) != nil ||
-	//    d.Decode(&yyy) != nil {
-	//   error...
-	// } else {
-	//   rf.xxx = xxx
-	//   rf.yyy = yyy
-	// }
+	r := bytes.NewBuffer(data)
+	d := labgob.NewDecoder(r)
+	var currentTerm, votedFor int
+	var logs LogEntries
+
+	decodeValues := func(values []interface{}) error {
+		for _, v := range values {
+			if err := d.Decode(v); err != nil {
+				return err
+			}
+		}
+		return nil
+	}
+	if err := decodeValues([]interface{}{&currentTerm, &votedFor, &logs}); err != nil {
+		log.Warnf("[readPersist] failed to decode, error: %v", err)
+	}
+	rf.currentTerm = currentTerm
+	rf.votedFor = votedFor
+	rf.logs = logs
+	log.Infof("[readPersist] Server[%v] read persist, term: %v, commitIndex: %v, log: %+v",
+		rf.me, rf.currentTerm, rf.commitIndex, rf.logs)
 }
 
 func (rf *Raft) isTermOutdateAndUpdateState(term int) bool {
@@ -267,9 +287,11 @@ func (rf *Raft) Start(command interface{}) (int, int, bool) {
 		return index, term, isLeader
 	}
 
-	rf.logs = append(rf.logs, &LogEntry{Command: command, Term: term})
+	entry := &LogEntry{Command: command, Term: term}
+	rf.logs = append(rf.logs, entry)
 	rf.nextIndex[rf.me] = rf.logs.LastIndex() + 1
 	rf.matchIndex[rf.me] = rf.logs.LastIndex()
+	log.Infof("[Start] Leader %v start to append log[%v] %+v", rf.me, index, entry)
 	return index, term, isLeader
 }
 

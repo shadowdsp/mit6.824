@@ -24,6 +24,8 @@ type AppendEntriesReply struct {
 	ServerID int
 	// log inconsistency
 	LogInconsistent bool
+	// PrevLogIndex
+	PrevLogIndex int
 }
 
 // AppendEntries AppendEntries RPC handler
@@ -65,8 +67,15 @@ func (rf *Raft) handleAppendEntriesRequest(args *AppendEntriesArgs, reply *Appen
 
 	// Rule 2: Reply false if log doesn’t contain an entry at prevLogIndex whose term matches prevLogTerm
 	if prevLog := rf.logs.Get(args.PrevLogIndex); prevLog == nil || prevLog.Term != args.PrevLogTerm {
+		matchLogIndex := args.PrevLogIndex
+		for ; matchLogIndex > 0; matchLogIndex-- {
+			if prevLog := rf.logs.Get(matchLogIndex); prevLog != nil && prevLog.Term == args.PrevLogTerm {
+				break
+			}
+		}
 		reply.Success = false
 		reply.LogInconsistent = true
+		reply.PrevLogIndex = matchLogIndex
 		return
 	}
 	// Here we don't use rf.logs.LastIndex(), because follower's last log index can be bigger than leader's.
@@ -105,7 +114,7 @@ func (rf *Raft) handleAppendEntriesReply(reply *AppendEntriesReply) {
 
 	if !reply.Success {
 		if reply.LogInconsistent {
-			rf.nextIndex[reply.ServerID]--
+			rf.nextIndex[reply.ServerID] = reply.PrevLogIndex + 1
 		}
 		return
 	}
@@ -123,7 +132,7 @@ func (rf *Raft) handleAppendEntriesReply(reply *AppendEntriesReply) {
 		}
 	}
 	if rf.isMajorityNum(count) && rf.logs.Get(matchIndex).Term == rf.currentTerm && matchIndex > rf.commitIndex {
-		log.Debugf("Leader updatedCommitIndex %v", matchIndex)
+		log.Debugf("Leader %v in term %v updatedCommitIndex %v", rf.me, rf.currentTerm, matchIndex)
 		rf.commitIndex = matchIndex
 	}
 	rf.persist()

@@ -21,7 +21,6 @@ import (
 	"bytes"
 	"math/rand"
 	"os"
-	"reflect"
 	"sync"
 	"sync/atomic"
 	"time"
@@ -382,7 +381,6 @@ func (rf *Raft) electLeader() {
 
 		go func(serverID int) {
 			if err := rf.sendRequestVoteWithTimeout(serverID, args, reply); err != nil {
-				// log.Warnf("[sendRequestVoteWithTimeout] err: %v", err)
 				return
 			}
 			rf.ReplyCh <- reply
@@ -396,7 +394,6 @@ func (rf *Raft) sendHeartbeat() {
 			continue
 		}
 
-		log.Debugf("[heartbeat] Leader %v sendHeartbeat to server %v", rf.me, serverID)
 		rf.mu.Lock()
 		prevLogIndex := rf.nextIndex[serverID] - 1
 		prevLogTerm := rf.logs.Get(prevLogIndex).Term
@@ -412,6 +409,8 @@ func (rf *Raft) sendHeartbeat() {
 			Logs:         logsToAppend,
 			LeaderCommit: rf.commitIndex,
 		}
+		log.Debugf("[heartbeat] Leader %v sendHeartbeat to server %v, prevLogIndex %v, prevLogTerm %v, len(logs) %v",
+			rf.me, serverID, prevLogIndex, prevLogTerm, len(logsToAppend))
 		rf.mu.Unlock()
 		reply := &AppendEntriesReply{}
 		go func(serverID int) {
@@ -459,21 +458,16 @@ func (rf *Raft) handleEvent() {
 			log.Debugf("Server %d was killed", rf.me)
 			return
 		}
-		log.Debugf("[handleEvent] handling event")
 		select {
 		case req := <-rf.RequestCh:
-			log.Debugf("[handleEvent] handling request event, type: %v", reflect.TypeOf(req.Args))
 			switch req.Args.(type) {
 			case *RequestVoteArgs:
 				rf.handleRequestVoteRequest(req.Args.(*RequestVoteArgs), req.Reply.(*RequestVoteReply))
 			case *AppendEntriesArgs:
 				rf.handleAppendEntriesRequest(req.Args.(*AppendEntriesArgs), req.Reply.(*AppendEntriesReply))
 			}
-			log.Debugf("[handleEvent] Server %v request not done, detail: %v", rf.me, req)
 			rf.RequestDone[req.GetID()] <- struct{}{}
-			log.Debugf("[handleEvent] Server %v request done, detail: %v", rf.me, req)
 		case reply := <-rf.ReplyCh:
-			log.Debugf("[handleEvent] handling reply event, type: %v", reflect.TypeOf(reply))
 			switch reply.(type) {
 			case *RequestVoteReply:
 				rf.handleRequestVoteReply(reply.(*RequestVoteReply))
@@ -619,7 +613,7 @@ func init() {
 	// Only log the warning severity or above.
 	log.SetLevel(log.DebugLevel)
 	log.SetLevel(log.InfoLevel)
-	// log.SetLevel(log.WarnLevel)
+	log.SetLevel(log.WarnLevel)
 	log.SetFormatter(&log.TextFormatter{
 		// DisableColors: true,
 		FullTimestamp: true,

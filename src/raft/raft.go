@@ -478,7 +478,7 @@ func (rf *Raft) handleEvent() {
 	}
 }
 
-func (rf *Raft) procEvent() {
+func (rf *Raft) runTimerCron() {
 	rf.mu.Lock()
 	oldTerm := rf.currentTerm
 	oldState := rf.state
@@ -535,7 +535,7 @@ func (rf *Raft) run() {
 			rf.sendHeartbeat()
 			break
 		}
-		rf.procEvent()
+		rf.runTimerCron()
 	}
 }
 

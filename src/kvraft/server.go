@@ -1,12 +1,16 @@
 package kvraft
 
 import (
-	"../labgob"
-	"../labrpc"
-	"log"
-	"../raft"
+	"os"
 	"sync"
 	"sync/atomic"
+	"time"
+
+	"mit6.824/src/labgob"
+	"mit6.824/src/labrpc"
+	"mit6.824/src/raft"
+
+	log "github.com/sirupsen/logrus"
 )
 
 const Debug = 0
@@ -18,11 +22,16 @@ func DPrintf(format string, a ...interface{}) (n int, err error) {
 	return
 }
 
-
 type Op struct {
 	// Your definitions here.
 	// Field names must start with capital letters,
 	// otherwise RPC will break.
+
+	// op name
+	Name string
+	// op key/value
+	Key   string
+	Value string
 }
 
 type KVServer struct {
@@ -35,15 +44,15 @@ type KVServer struct {
 	maxraftstate int // snapshot if log grows this big
 
 	// Your definitions here.
-}
+	requestCh chan Request
+	// replyCh   map[int]chan struct{}
 
+	appliedOp   map[int]Op
+	requestDone map[int]struct{}
+	// requestIDToLogIndexMapping map[int]int
+	// logIndexToRequestIDMapping map[int]int
 
-func (kv *KVServer) Get(args *GetArgs, reply *GetReply) {
-	// Your code here.
-}
-
-func (kv *KVServer) PutAppend(args *PutAppendArgs, reply *PutAppendReply) {
-	// Your code here.
+	store map[string]string
 }
 
 //
@@ -67,6 +76,77 @@ func (kv *KVServer) killed() bool {
 	return z == 1
 }
 
+func (kv *KVServer) waitForIndexApplied(index int) {
+	for {
+		// kv.mu.Lock()
+		_, ok := kv.appliedOp[index]
+		// kv.mu.Unlock()
+		if ok {
+			break
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
+}
+
+func (kv *KVServer) waitForRequestDone(requestID int) {
+	for {
+		kv.mu.Lock()
+		_, ok := kv.requestDone[requestID]
+		kv.mu.Unlock()
+		if ok {
+			break
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
+}
+
+func (kv *KVServer) handleEvent() {
+	for {
+		if kv.killed() {
+			log.Infof("[handleEvent] KV Server %v was killed", kv.me)
+			return
+		}
+
+		select {
+		case req := <-kv.requestCh:
+			switch req.Args.(type) {
+			case *GetArgs:
+				kv.handleGetRequest(req.Args.(*GetArgs), req.Reply.(*GetReply))
+			case *PutAppendArgs:
+				kv.handlePutAppendRequest(req.Args.(*PutAppendArgs), req.Reply.(*PutAppendReply))
+			}
+		}
+	}
+}
+
+func (kv *KVServer) handleApplyCh() {
+	for msg := range kv.applyCh {
+		if kv.killed() {
+			log.Infof("[handleApplyCh] KV Server %v was killed", kv.me)
+			return
+		}
+
+		if !msg.CommandValid {
+			continue
+		}
+
+		kv.mu.Lock()
+		op := msg.Command.(Op)
+		switch op.Name {
+		// case OpNameGet:
+		case OpNamePut:
+			kv.store[op.Key] = op.Value
+		case OpNameAppend:
+			if _, ok := kv.store[op.Key]; !ok {
+				kv.store[op.Key] = ""
+			}
+			kv.store[op.Key] += op.Value
+		}
+		kv.appliedOp[msg.CommandIndex] = op
+		kv.mu.Unlock()
+	}
+}
+
 //
 // servers[] contains the ports of the set of
 // servers that will cooperate via Raft to
@@ -86,16 +166,36 @@ func StartKVServer(servers []*labrpc.ClientEnd, me int, persister *raft.Persiste
 	// Go's RPC library to marshall/unmarshall.
 	labgob.Register(Op{})
 
-	kv := new(KVServer)
-	kv.me = me
-	kv.maxraftstate = maxraftstate
+	// You may need initialization code here.
+	applyCh := make(chan raft.ApplyMsg)
+	kv := &KVServer{
+		me:           me,
+		maxraftstate: maxraftstate,
+		applyCh:      applyCh,
+		rf:           raft.Make(servers, me, persister, applyCh),
+		requestCh:    make(chan Request),
+		// replyCh:      make(map[int]chan struct{}),
+		requestDone: make(map[int]struct{}),
+		appliedOp:   make(map[int]Op),
+
+		store: make(map[string]string),
+	}
 
 	// You may need initialization code here.
-
-	kv.applyCh = make(chan raft.ApplyMsg)
-	kv.rf = raft.Make(servers, me, persister, kv.applyCh)
-
-	// You may need initialization code here.
+	go kv.handleEvent()
+	go kv.handleApplyCh()
 
 	return kv
+}
+
+func init() {
+	log.SetOutput(os.Stdout)
+	// Only log the warning severity or above.
+	log.SetLevel(log.DebugLevel)
+	log.SetLevel(log.InfoLevel)
+	// log.SetLevel(log.WarnLevel)
+	log.SetFormatter(&log.TextFormatter{
+		// DisableColors: true,
+		FullTimestamp: true,
+	})
 }

@@ -1,13 +1,26 @@
 package kvraft
 
-import "../labrpc"
-import "crypto/rand"
-import "math/big"
+import (
+	"crypto/rand"
+	"math/big"
+	"sync"
+	"time"
 
+	log "github.com/sirupsen/logrus"
+	"mit6.824/src/labrpc"
+)
+
+const (
+	RetryInterval = 10 * time.Millisecond
+)
 
 type Clerk struct {
+	mu sync.Mutex // guards
+
 	servers []*labrpc.ClientEnd
 	// You will have to modify this struct.
+	lastLeaderID int
+	requestID    int
 }
 
 func nrand() int64 {
@@ -21,6 +34,8 @@ func MakeClerk(servers []*labrpc.ClientEnd) *Clerk {
 	ck := new(Clerk)
 	ck.servers = servers
 	// You'll have to add code here.
+	ck.lastLeaderID = 0
+	ck.requestID = 0
 	return ck
 }
 
@@ -36,10 +51,54 @@ func MakeClerk(servers []*labrpc.ClientEnd) *Clerk {
 // must match the declared types of the RPC handler function's
 // arguments. and reply must be passed as a pointer.
 //
-func (ck *Clerk) Get(key string) string {
 
+func (ck *Clerk) getAndIncRequestID() int {
+	ck.mu.Lock()
+	defer ck.mu.Unlock()
+	ck.requestID++
+	return ck.requestID
+}
+
+func (ck *Clerk) get(requestID int, serverID int, key string) (string, bool) {
+	value, success := "", true
+
+	args := GetArgs{
+		RequestID: requestID,
+		Key:       key,
+	}
+	reply := GetReply{}
+	ok := ck.servers[serverID].Call(RpcNameGet, &args, &reply)
+	if !ok || reply.Err == ErrWrongLeader {
+		success = false
+	}
+	if ok {
+		value = reply.Value
+	}
+	return value, success
+}
+
+func (ck *Clerk) Get(key string) string {
 	// You will have to modify this function.
-	return ""
+	requestID := ck.getAndIncRequestID()
+	// defer FuncLatency("Clerk.Get", time.Now(), requestID)
+	log.Infof("[Clerk.Get] reqID %v, key %v", requestID, key)
+	for {
+		time.Sleep(RetryInterval)
+
+		if v, success := ck.get(requestID, ck.lastLeaderID, key); success {
+			return v
+		}
+
+		for i := range ck.servers {
+			if i == ck.lastLeaderID {
+				continue
+			}
+			if v, success := ck.get(requestID, i, key); success {
+				ck.lastLeaderID = i
+				return v
+			}
+		}
+	}
 }
 
 //
@@ -52,8 +111,47 @@ func (ck *Clerk) Get(key string) string {
 // must match the declared types of the RPC handler function's
 // arguments. and reply must be passed as a pointer.
 //
+func (ck *Clerk) putAppend(requestID int, serverID int,
+	key string, value string, op string) bool {
+
+	success := true
+	args := PutAppendArgs{
+		RequestID: requestID,
+		Key:       key,
+		Value:     value,
+		Op:        op,
+	}
+	reply := PutAppendReply{}
+	ok := ck.servers[serverID].Call(RpcNamePutAppend, &args, &reply)
+	if !ok || reply.Err == ErrWrongLeader {
+		success = false
+	}
+	return success
+}
+
 func (ck *Clerk) PutAppend(key string, value string, op string) {
+	requestID := ck.getAndIncRequestID()
+
+	// defer FuncLatency("Clerk.PutAppend", time.Now(), requestID)
+	log.Infof("[Clerk.PutAppend] reqID %v, key %v, value %v, op %v", requestID, key, value, op)
 	// You will have to modify this function.
+	for {
+		time.Sleep(RetryInterval)
+
+		if success := ck.putAppend(requestID, ck.lastLeaderID, key, value, op); success {
+			return
+		}
+
+		for i := range ck.servers {
+			if i == ck.lastLeaderID {
+				continue
+			}
+			if success := ck.putAppend(requestID, i, key, value, op); success {
+				ck.lastLeaderID = i
+				return
+			}
+		}
+	}
 }
 
 func (ck *Clerk) Put(key string, value string) {

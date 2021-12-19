@@ -485,7 +485,7 @@ func (rf *Raft) runTimerCron() {
 	rf.mu.Unlock()
 	for {
 		if rf.killed() {
-			log.Warnf("Server %d was killed", rf.me)
+			log.Infof("Server %d was killed", rf.me)
 			rf.stopTimer(rf.electionTimer)
 			rf.stopTimer(rf.heartbeatTimer)
 			return
@@ -519,13 +519,13 @@ func (rf *Raft) runTimerCron() {
 func (rf *Raft) run() {
 	for {
 		if rf.killed() {
-			log.Warnf("Server %d was killed", rf.me)
+			log.Infof("Server %d was killed", rf.me)
 			time.Sleep(heartbeatInterval)
 			return
 		}
 		state := rf.getState()
 		rf.mu.Lock()
-		log.Infof("[run] Server %d term: %v, state: %v, timestamp: %v", rf.me, rf.currentTerm, state, time.Now().UnixNano())
+		log.Debugf("[run] Server %d term: %v, state: %v, timestamp: %v", rf.me, rf.currentTerm, state, time.Now().UnixNano())
 		rf.mu.Unlock()
 		switch state {
 		case Candidate:

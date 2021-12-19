@@ -47,7 +47,7 @@ func (rf *Raft) handleRequestVoteRequest(args *RequestVoteArgs, reply *RequestVo
 	rf.mu.Lock()
 	defer rf.mu.Unlock()
 
-	log.Infof("[handleRequestVoteRequest] Start: Server %v state: %v, commitIndex: %v, lastLogIndex: %v, currentTerm: %v, voteFor: %v,  args: %+v, timestamp: %v",
+	log.Debugf("[handleRequestVoteRequest] Start: Server %v state: %v, commitIndex: %v, lastLogIndex: %v, currentTerm: %v, voteFor: %v,  args: %+v, timestamp: %v",
 		rf.me, rf.state, rf.commitIndex, rf.logs.LastIndex(), rf.currentTerm, rf.votedFor, args, time.Now().UnixNano())
 
 	reply.ServerID = rf.me
@@ -70,13 +70,13 @@ func (rf *Raft) handleRequestVoteRequest(args *RequestVoteArgs, reply *RequestVo
 			rf.resetElectionTimer()
 		}
 	}
-	log.Infof("[handleRequestVoteRequest] Finish: Server %v state: %v, currentTerm: %v, voteFor: %v,  args: %+v,", rf.me, rf.state, rf.currentTerm, rf.votedFor, args)
+	log.Debugf("[handleRequestVoteRequest] Finish: Server %v state: %v, currentTerm: %v, voteFor: %v,  args: %+v,", rf.me, rf.state, rf.currentTerm, rf.votedFor, args)
 }
 
 func (rf *Raft) handleRequestVoteReply(reply *RequestVoteReply) {
 	rf.mu.Lock()
 	defer rf.mu.Unlock()
-	log.Infof("[handleRequestVoteReply] Server %v received reply: %+v, voteNums: %v, currentTerm: %v", rf.me, reply, rf.voteNums, rf.currentTerm)
+	log.Debugf("[handleRequestVoteReply] Server %v received reply: %+v, voteNums: %v, currentTerm: %v", rf.me, reply, rf.voteNums, rf.currentTerm)
 	if rf.isTermOutdateAndUpdateState(reply.Term) {
 		return
 	}
@@ -84,7 +84,7 @@ func (rf *Raft) handleRequestVoteReply(reply *RequestVoteReply) {
 	if reply.VoteGranted {
 		rf.voteNums++
 	}
-	log.Infof("[handleRequestVoteReply] Server %v voteNums: %v/%v, isMajorityNum: %v", rf.me, rf.voteNums, len(rf.peers), rf.isMajorityNum(rf.voteNums))
+	log.Debugf("[handleRequestVoteReply] Server %v voteNums: %v/%v, isMajorityNum: %v", rf.me, rf.voteNums, len(rf.peers), rf.isMajorityNum(rf.voteNums))
 
 	if rf.isMajorityNum(rf.voteNums) {
 		rf.updateState(Leader)

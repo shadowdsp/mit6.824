@@ -1,6 +1,7 @@
 package kvraft
 
 import (
+	"net/http"
 	"os"
 	"sync"
 	"sync/atomic"
@@ -44,15 +45,11 @@ type KVServer struct {
 	maxraftstate int // snapshot if log grows this big
 
 	// Your definitions here.
-	requestCh chan Request
-	// replyCh   map[int]chan struct{}
+	requestCh     chan Request
+	requestDoneCh chan struct{}
 
-	appliedOp   map[int]Op
-	requestDone map[int]struct{}
-	// requestIDToLogIndexMapping map[int]int
-	// logIndexToRequestIDMapping map[int]int
-
-	store map[string]string
+	appliedOp map[int]Op
+	store     map[string]string
 }
 
 //
@@ -78,20 +75,8 @@ func (kv *KVServer) killed() bool {
 
 func (kv *KVServer) waitForIndexApplied(index int) {
 	for {
-		// kv.mu.Lock()
-		_, ok := kv.appliedOp[index]
-		// kv.mu.Unlock()
-		if ok {
-			break
-		}
-		time.Sleep(10 * time.Millisecond)
-	}
-}
-
-func (kv *KVServer) waitForRequestDone(requestID int) {
-	for {
 		kv.mu.Lock()
-		_, ok := kv.requestDone[requestID]
+		_, ok := kv.appliedOp[index]
 		kv.mu.Unlock()
 		if ok {
 			break
@@ -173,10 +158,10 @@ func StartKVServer(servers []*labrpc.ClientEnd, me int, persister *raft.Persiste
 		maxraftstate: maxraftstate,
 		applyCh:      applyCh,
 		rf:           raft.Make(servers, me, persister, applyCh),
-		requestCh:    make(chan Request),
-		// replyCh:      make(map[int]chan struct{}),
-		requestDone: make(map[int]struct{}),
-		appliedOp:   make(map[int]Op),
+
+		requestCh:     make(chan Request),
+		requestDoneCh: make(chan struct{}),
+		appliedOp:     make(map[int]Op),
 
 		store: make(map[string]string),
 	}
@@ -186,6 +171,10 @@ func StartKVServer(servers []*labrpc.ClientEnd, me int, persister *raft.Persiste
 	go kv.handleApplyCh()
 
 	return kv
+}
+
+func startPprofServer() {
+	http.ListenAndServe("0.0.0.0:6060", nil)
 }
 
 func init() {
@@ -198,4 +187,5 @@ func init() {
 		// DisableColors: true,
 		FullTimestamp: true,
 	})
+	go startPprofServer()
 }

@@ -8,13 +8,14 @@ func (kv *KVServer) Get(args *GetArgs, reply *GetReply) {
 	// Your code here.
 	// defer FuncLatency("KVServer.RPC.Get", time.Now(), args, reply)
 
-	// log.Infof("[RPC Get] Start! Server %v, reqID: %v, args: %+v, reply: %+v", kv.me, args.RequestID, args, reply)
+	log.Infof("[RPC Get] Start! Server %v, reqID: %v, args: %+v, reply: %+v", kv.me, args.RequestID, args, reply)
 
 	kv.requestCh <- Request{
 		Args:  args,
 		Reply: reply,
 	}
-	kv.waitForRequestDone(args.RequestID)
+
+	<-kv.requestDoneCh
 	log.Infof("[RPC Get] Finished! Server %v, reqID: %v, args: %+v, reply: %+v", kv.me, args.RequestID, args, reply)
 }
 
@@ -26,7 +27,7 @@ func (kv *KVServer) handleGetRequest(args *GetArgs, reply *GetReply) {
 
 	if !isLeader {
 		reply.Err = ErrWrongLeader
-		kv.requestDone[args.RequestID] = struct{}{}
+		kv.requestDoneCh <- struct{}{}
 		return
 	}
 
@@ -41,5 +42,5 @@ func (kv *KVServer) handleGetRequest(args *GetArgs, reply *GetReply) {
 	} else {
 		reply.Err = ErrNoKey
 	}
-	kv.requestDone[args.RequestID] = struct{}{}
+	kv.requestDoneCh <- struct{}{}
 }

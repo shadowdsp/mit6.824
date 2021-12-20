@@ -585,8 +585,8 @@ func Make(peers []*labrpc.ClientEnd, me int,
 		nextIndex:  make([]int, len(peers)),
 		matchIndex: make([]int, len(peers)),
 
-		RequestCh:   make(chan Request, 100),
-		ReplyCh:     make(chan Reply, 100),
+		RequestCh:   make(chan Request),
+		ReplyCh:     make(chan Reply),
 		RequestDone: make([]chan struct{}, len(RequestNameIDMapping)),
 	}
 	for i := range rf.RequestDone {

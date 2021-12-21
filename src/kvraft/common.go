@@ -13,6 +13,7 @@ const (
 	OK             = "OK"
 	ErrNoKey       = "ErrNoKey"
 	ErrWrongLeader = "ErrWrongLeader"
+	ErrOutOfDate   = "ErrOutOfDate"
 
 	OpNameGet    = "Get"
 	OpNamePut    = "Put"
@@ -69,4 +70,8 @@ type GetReply struct {
 
 func FuncLatency(name string, start time.Time, args ...interface{}) {
 	defer log.Infof("[Function Latency][%v] latency %.2fs. args: %+v", name, time.Since(start).Seconds(), args)
+}
+
+func isReplySuccess(err Err) bool {
+	return err == OK || err == ""
 }

@@ -48,8 +48,9 @@ type KVServer struct {
 	requestCh     chan Request
 	requestDoneCh chan struct{}
 
-	appliedOp map[int]Op
-	store     map[string]string
+	latestRequestID int
+	appliedOp       map[int]Op
+	store           map[string]string
 }
 
 //
@@ -71,6 +72,20 @@ func (kv *KVServer) Kill() {
 func (kv *KVServer) killed() bool {
 	z := atomic.LoadInt32(&kv.dead)
 	return z == 1
+}
+
+func (kv *KVServer) updateLatestRequestID(requestID int, err Err) {
+	kv.mu.Lock()
+	if isReplySuccess(err) && kv.latestRequestID < requestID {
+		kv.latestRequestID = requestID
+	}
+	kv.mu.Unlock()
+}
+
+func (kv *KVServer) getLatestRequestID() int {
+	kv.mu.Lock()
+	defer kv.mu.Unlock()
+	return kv.latestRequestID
 }
 
 func (kv *KVServer) waitForIndexApplied(index int) {
@@ -159,9 +174,10 @@ func StartKVServer(servers []*labrpc.ClientEnd, me int, persister *raft.Persiste
 		applyCh:      applyCh,
 		rf:           raft.Make(servers, me, persister, applyCh),
 
-		requestCh:     make(chan Request),
-		requestDoneCh: make(chan struct{}),
-		appliedOp:     make(map[int]Op),
+		requestCh:       make(chan Request),
+		requestDoneCh:   make(chan struct{}),
+		latestRequestID: 0,
+		appliedOp:       make(map[int]Op),
 
 		store: make(map[string]string),
 	}

@@ -53,9 +53,7 @@ func MakeClerk(servers []*labrpc.ClientEnd) *Clerk {
 //
 
 func (ck *Clerk) getAndIncRequestID() int {
-	ck.mu.Lock()
-	defer ck.mu.Unlock()
-	ck.requestID++
+	ck.requestID += 1
 	return ck.requestID
 }
 
@@ -79,9 +77,10 @@ func (ck *Clerk) get(requestID int, serverID int, key string) (string, bool) {
 
 func (ck *Clerk) Get(key string) string {
 	// You will have to modify this function.
+	ck.mu.Lock()
 	requestID := ck.getAndIncRequestID()
-	// defer FuncLatency("Clerk.Get", time.Now(), requestID)
 	log.Infof("[Clerk.Get] reqID %v, key %v", requestID, key)
+	ck.mu.Unlock()
 	for {
 		time.Sleep(RetryInterval)
 
@@ -130,11 +129,11 @@ func (ck *Clerk) putAppend(requestID int, serverID int,
 }
 
 func (ck *Clerk) PutAppend(key string, value string, op string) {
-	requestID := ck.getAndIncRequestID()
-
-	// defer FuncLatency("Clerk.PutAppend", time.Now(), requestID)
-	log.Infof("[Clerk.PutAppend] reqID %v, key %v, value %v, op %v", requestID, key, value, op)
 	// You will have to modify this function.
+	ck.mu.Lock()
+	requestID := ck.getAndIncRequestID()
+	log.Infof("[Clerk.PutAppend] reqID %v, key %v, value %v, op %v", requestID, key, value, op)
+	ck.mu.Unlock()
 	for {
 		time.Sleep(RetryInterval)
 
@@ -157,6 +156,7 @@ func (ck *Clerk) PutAppend(key string, value string, op string) {
 func (ck *Clerk) Put(key string, value string) {
 	ck.PutAppend(key, value, "Put")
 }
+
 func (ck *Clerk) Append(key string, value string) {
 	ck.PutAppend(key, value, "Append")
 }

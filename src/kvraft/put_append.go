@@ -8,17 +8,28 @@ func (kv *KVServer) PutAppend(args *PutAppendArgs, reply *PutAppendReply) {
 	// Your code here.
 	// defer FuncLatency("KVServer.RPC.PutAppend", time.Now(), args, reply)
 
-	log.Infof("[RPC PutAppend] Start! Server %v, reqID: %v, args: %+v, reply: %+v", kv.me, args.RequestID, args, reply)
+	// log.Infof("[RPC PutAppend] Start! Server %v, reqID: %v, args: %+v, reply: %+v", kv.me, args.RequestID, args, reply)
 
 	kv.requestCh <- Request{
 		Args:  args,
 		Reply: reply,
 	}
 	<-kv.requestDoneCh
+
+	// if !isReplySuccess(reply.Err) {
 	log.Infof("[RPC PutAppend] Finished! Server %v, reqID: %v, args: %+v, reply: %+v", kv.me, args.RequestID, args, reply)
+	// }
 }
 
 func (kv *KVServer) handlePutAppendRequest(args *PutAppendArgs, reply *PutAppendReply) {
+	defer func() { kv.requestDoneCh <- struct{}{} }()
+
+	latestRequestID := kv.getLatestRequestID()
+	if args.RequestID < latestRequestID {
+		reply.Err = ErrOutOfDate
+		return
+	}
+
 	index, _, isLeader := kv.rf.Start(Op{
 		Name:  args.Op,
 		Key:   args.Key,
@@ -27,10 +38,9 @@ func (kv *KVServer) handlePutAppendRequest(args *PutAppendArgs, reply *PutAppend
 
 	if !isLeader {
 		reply.Err = ErrWrongLeader
-		kv.requestDoneCh <- struct{}{}
 		return
 	}
 
 	kv.waitForIndexApplied(index)
-	kv.requestDoneCh <- struct{}{}
+	kv.updateLatestRequestID(args.RequestID, reply.Err)
 }

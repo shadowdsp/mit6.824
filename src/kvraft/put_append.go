@@ -17,15 +17,14 @@ func (kv *KVServer) PutAppend(args *PutAppendArgs, reply *PutAppendReply) {
 	<-kv.requestDoneCh
 
 	// if !isReplySuccess(reply.Err) {
-	log.Infof("[RPC PutAppend] Finished! Server %v, reqID: %v, args: %+v, reply: %+v", kv.me, args.RequestID, args, reply)
+	log.Infof("[RPC PutAppend] Finished! Server %v, reqID: %v, args: %+v, reply: %+v", kv.me, args.RequestUid, args, reply)
 	// }
 }
 
 func (kv *KVServer) handlePutAppendRequest(args *PutAppendArgs, reply *PutAppendReply) {
 	defer func() { kv.requestDoneCh <- struct{}{} }()
 
-	latestRequestID := kv.getLatestRequestID()
-	if args.RequestID < latestRequestID {
+	if kv.isRequestedUid(args.GetRequestUid()) {
 		reply.Err = ErrOutOfDate
 		return
 	}
@@ -42,5 +41,5 @@ func (kv *KVServer) handlePutAppendRequest(args *PutAppendArgs, reply *PutAppend
 	}
 
 	kv.waitForIndexApplied(index)
-	kv.updateLatestRequestID(args.RequestID, reply.Err)
+	kv.updateRequestUid(args.RequestUid, reply.Err)
 }

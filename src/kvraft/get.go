@@ -17,15 +17,14 @@ func (kv *KVServer) Get(args *GetArgs, reply *GetReply) {
 	<-kv.requestDoneCh
 
 	// if !isReplySuccess(reply.Err) {
-	log.Infof("[RPC Get] Finished! Server %v, reqID: %v, args: %+v, reply: %+v", kv.me, args.RequestID, args, reply)
+	log.Infof("[RPC Get] Finished! Server %v, reqID: %v, args: %+v, reply: %+v", kv.me, args.RequestUid, args, reply)
 	// }
 }
 
 func (kv *KVServer) handleGetRequest(args *GetArgs, reply *GetReply) {
 	defer func() { kv.requestDoneCh <- struct{}{} }()
 
-	latestRequestID := kv.getLatestRequestID()
-	if args.RequestID < latestRequestID {
+	if kv.isRequestedUid(args.GetRequestUid()) {
 		reply.Err = ErrOutOfDate
 		return
 	}
@@ -51,5 +50,5 @@ func (kv *KVServer) handleGetRequest(args *GetArgs, reply *GetReply) {
 	} else {
 		reply.Err = ErrNoKey
 	}
-	kv.updateLatestRequestID(args.RequestID, reply.Err)
+	kv.updateRequestUid(args.RequestUid, reply.Err)
 }

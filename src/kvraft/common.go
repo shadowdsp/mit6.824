@@ -31,7 +31,7 @@ type Request struct {
 }
 
 type Args interface {
-	GetRequestID() int
+	GetRequestUid() string
 }
 
 type Reply interface{}
@@ -46,10 +46,10 @@ type PutAppendArgs struct {
 	// You'll have to add definitions here.
 	// Field names must start with capital letters,
 	// otherwise RPC will break.
-	RequestID int
+	RequestUid string
 }
 
-func (args PutAppendArgs) GetRequestID() int { return args.RequestID }
+func (args PutAppendArgs) GetRequestUid() string { return args.RequestUid }
 
 type PutAppendReply struct {
 	Err Err
@@ -58,10 +58,10 @@ type PutAppendReply struct {
 type GetArgs struct {
 	Key string
 	// You'll have to add definitions here.
-	RequestID int
+	RequestUid string
 }
 
-func (args GetArgs) GetRequestID() int { return args.RequestID }
+func (args GetArgs) GetRequestUid() string { return args.RequestUid }
 
 type GetReply struct {
 	Err   Err

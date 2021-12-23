@@ -48,9 +48,9 @@ type KVServer struct {
 	requestCh     chan Request
 	requestDoneCh chan struct{}
 
-	requestedUid map[string]struct{}
-	appliedOp    map[int]Op
-	store        map[string]string
+	requestedReply map[string]Reply
+	appliedOp      map[int]Op
+	store          map[string]string
 }
 
 //
@@ -74,19 +74,22 @@ func (kv *KVServer) killed() bool {
 	return z == 1
 }
 
-func (kv *KVServer) updateRequestUid(requestUid string, err Err) {
+func (kv *KVServer) updateRequestReply(requestUid string, reply Reply) {
 	kv.mu.Lock()
 	defer kv.mu.Unlock()
-	if _, ok := kv.requestedUid[requestUid]; !ok && isReplySuccess(err) {
-		kv.requestedUid[requestUid] = struct{}{}
+	if _, ok := kv.requestedReply[requestUid]; !ok && isReplySuccess(reply.GetErr()) {
+		kv.requestedReply[requestUid] = reply
 	}
 }
 
-func (kv *KVServer) isRequestedUid(requestUid string) bool {
+func (kv *KVServer) getRequestedReply(requestUid string) interface{} {
 	kv.mu.Lock()
 	defer kv.mu.Unlock()
-	_, ok := kv.requestedUid[requestUid]
-	return ok
+	v, ok := kv.requestedReply[requestUid]
+	if !ok {
+		return nil
+	}
+	return v
 }
 
 func (kv *KVServer) waitForIndexApplied(index int) {
@@ -175,10 +178,10 @@ func StartKVServer(servers []*labrpc.ClientEnd, me int, persister *raft.Persiste
 		applyCh:      applyCh,
 		rf:           raft.Make(servers, me, persister, applyCh),
 
-		requestCh:     make(chan Request),
-		requestDoneCh: make(chan struct{}),
-		requestedUid:  make(map[string]struct{}),
-		appliedOp:     make(map[int]Op),
+		requestCh:      make(chan Request),
+		requestDoneCh:  make(chan struct{}),
+		requestedReply: make(map[string]Reply),
+		appliedOp:      make(map[int]Op),
 
 		store: make(map[string]string),
 	}

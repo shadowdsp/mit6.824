@@ -24,8 +24,9 @@ func (kv *KVServer) Get(args *GetArgs, reply *GetReply) {
 func (kv *KVServer) handleGetRequest(args *GetArgs, reply *GetReply) {
 	defer func() { kv.requestDoneCh <- struct{}{} }()
 
-	if kv.isRequestedUid(args.GetRequestUid()) {
-		reply.Err = ErrOutOfDate
+	requestedReply := kv.getRequestedReply(args.GetRequestUid())
+	if requestedReply != nil {
+		reply = requestedReply.(*GetReply)
 		return
 	}
 
@@ -50,5 +51,5 @@ func (kv *KVServer) handleGetRequest(args *GetArgs, reply *GetReply) {
 	} else {
 		reply.Err = ErrNoKey
 	}
-	kv.updateRequestUid(args.RequestUid, reply.Err)
+	kv.updateRequestReply(args.RequestUid, reply)
 }

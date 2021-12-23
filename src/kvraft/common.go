@@ -13,7 +13,6 @@ const (
 	OK             = "OK"
 	ErrNoKey       = "ErrNoKey"
 	ErrWrongLeader = "ErrWrongLeader"
-	ErrOutOfDate   = "ErrOutOfDate"
 
 	OpNameGet    = "Get"
 	OpNamePut    = "Put"
@@ -34,7 +33,9 @@ type Args interface {
 	GetRequestUid() string
 }
 
-type Reply interface{}
+type Reply interface {
+	GetErr() Err
+}
 
 type Err string
 
@@ -55,6 +56,8 @@ type PutAppendReply struct {
 	Err Err
 }
 
+func (reply PutAppendReply) GetErr() Err { return reply.Err }
+
 type GetArgs struct {
 	Key string
 	// You'll have to add definitions here.
@@ -67,6 +70,8 @@ type GetReply struct {
 	Err   Err
 	Value string
 }
+
+func (reply GetReply) GetErr() Err { return reply.Err }
 
 func FuncLatency(name string, start time.Time, args ...interface{}) {
 	defer log.Infof("[Function Latency][%v] latency %.2fs. args: %+v", name, time.Since(start).Seconds(), args)

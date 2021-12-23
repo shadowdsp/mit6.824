@@ -24,8 +24,9 @@ func (kv *KVServer) PutAppend(args *PutAppendArgs, reply *PutAppendReply) {
 func (kv *KVServer) handlePutAppendRequest(args *PutAppendArgs, reply *PutAppendReply) {
 	defer func() { kv.requestDoneCh <- struct{}{} }()
 
-	if kv.isRequestedUid(args.GetRequestUid()) {
-		reply.Err = ErrOutOfDate
+	requestedReply := kv.getRequestedReply(args.GetRequestUid())
+	if requestedReply != nil {
+		reply = requestedReply.(*PutAppendReply)
 		return
 	}
 
@@ -41,5 +42,5 @@ func (kv *KVServer) handlePutAppendRequest(args *PutAppendArgs, reply *PutAppend
 	}
 
 	kv.waitForIndexApplied(index)
-	kv.updateRequestUid(args.RequestUid, reply.Err)
+	kv.updateRequestReply(args.RequestUid, reply)
 }

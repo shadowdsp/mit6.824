@@ -39,7 +39,6 @@ func (rf *Raft) RequestVote(args *RequestVoteArgs, reply *RequestVoteReply) {
 		Args:  args,
 		Reply: reply,
 	}
-	log.Debugf("[RequestVote] Server %v received args: %+v", rf.me, args)
 	<-rf.RequestDone[RequestNameIDMapping[rpcMethodRequestVote]]
 }
 

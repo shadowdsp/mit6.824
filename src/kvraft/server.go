@@ -27,7 +27,7 @@ type Op struct {
 	// Your definitions here.
 	// Field names must start with capital letters,
 	// otherwise RPC will break.
-
+	RequestUid string
 	// op name
 	Name string
 	// op key/value
@@ -48,9 +48,9 @@ type KVServer struct {
 	requestCh     chan Request
 	requestDoneCh chan struct{}
 
-	requestedReply map[string]Reply
-	appliedOp      map[int]Op
-	store          map[string]string
+	appliedRequestUid map[string]struct{}
+	appliedOp         map[int]Op
+	store             map[string]string
 }
 
 //
@@ -74,23 +74,23 @@ func (kv *KVServer) killed() bool {
 	return z == 1
 }
 
-func (kv *KVServer) updateRequestReply(requestUid string, reply Reply) {
-	kv.mu.Lock()
-	defer kv.mu.Unlock()
-	if _, ok := kv.requestedReply[requestUid]; !ok && isReplySuccess(reply.GetErr()) {
-		kv.requestedReply[requestUid] = reply
-	}
-}
+// func (kv *KVServer) updateRequestReply(requestUid string, reply Reply) {
+// 	kv.mu.Lock()
+// 	defer kv.mu.Unlock()
+// 	if _, ok := kv.requestedReply[requestUid]; !ok && isReplySuccess(reply.GetErr()) {
+// 		kv.requestedReply[requestUid] = reply
+// 	}
+// }
 
-func (kv *KVServer) getRequestedReply(requestUid string) interface{} {
-	kv.mu.Lock()
-	defer kv.mu.Unlock()
-	v, ok := kv.requestedReply[requestUid]
-	if !ok {
-		return nil
-	}
-	return v
-}
+// func (kv *KVServer) getRequestedReply(requestUid string) interface{} {
+// 	kv.mu.Lock()
+// 	defer kv.mu.Unlock()
+// 	v, ok := kv.requestedReply[requestUid]
+// 	if !ok {
+// 		return nil
+// 	}
+// 	return v
+// }
 
 func (kv *KVServer) waitForIndexApplied(index int) {
 	for {
@@ -136,6 +136,11 @@ func (kv *KVServer) handleApplyCh() {
 
 		kv.mu.Lock()
 		op := msg.Command.(Op)
+		if _, ok := kv.appliedRequestUid[op.RequestUid]; ok {
+			kv.mu.Unlock()
+			continue
+		}
+
 		switch op.Name {
 		// case OpNameGet:
 		case OpNamePut:
@@ -147,6 +152,7 @@ func (kv *KVServer) handleApplyCh() {
 			kv.store[op.Key] += op.Value
 		}
 		kv.appliedOp[msg.CommandIndex] = op
+		kv.appliedRequestUid[op.RequestUid] = struct{}{}
 		kv.mu.Unlock()
 	}
 }
@@ -178,10 +184,10 @@ func StartKVServer(servers []*labrpc.ClientEnd, me int, persister *raft.Persiste
 		applyCh:      applyCh,
 		rf:           raft.Make(servers, me, persister, applyCh),
 
-		requestCh:      make(chan Request),
-		requestDoneCh:  make(chan struct{}),
-		requestedReply: make(map[string]Reply),
-		appliedOp:      make(map[int]Op),
+		requestCh:         make(chan Request),
+		requestDoneCh:     make(chan struct{}),
+		appliedRequestUid: make(map[string]struct{}),
+		appliedOp:         make(map[int]Op),
 
 		store: make(map[string]string),
 	}
@@ -201,7 +207,7 @@ func init() {
 	log.SetOutput(os.Stdout)
 	// Only log the warning severity or above.
 	log.SetLevel(log.DebugLevel)
-	log.SetLevel(log.InfoLevel)
+	// log.SetLevel(log.InfoLevel)
 	// log.SetLevel(log.WarnLevel)
 	log.SetFormatter(&log.TextFormatter{
 		// DisableColors: true,

@@ -24,16 +24,17 @@ func (kv *KVServer) PutAppend(args *PutAppendArgs, reply *PutAppendReply) {
 func (kv *KVServer) handlePutAppendRequest(args *PutAppendArgs, reply *PutAppendReply) {
 	defer func() { kv.requestDoneCh <- struct{}{} }()
 
-	requestedReply := kv.getRequestedReply(args.GetRequestUid())
-	if requestedReply != nil {
-		reply = requestedReply.(*PutAppendReply)
-		return
-	}
+	// requestedReply := kv.getRequestedReply(args.GetRequestUid())
+	// if requestedReply != nil {
+	// 	reply = requestedReply.(*PutAppendReply)
+	// 	return
+	// }
 
 	index, _, isLeader := kv.rf.Start(Op{
-		Name:  args.Op,
-		Key:   args.Key,
-		Value: args.Value,
+		RequestUid: args.GetRequestUid(),
+		Name:       args.Op,
+		Key:        args.Key,
+		Value:      args.Value,
 	})
 
 	if !isLeader {
@@ -42,5 +43,5 @@ func (kv *KVServer) handlePutAppendRequest(args *PutAppendArgs, reply *PutAppend
 	}
 
 	kv.waitForIndexApplied(index)
-	kv.updateRequestReply(args.RequestUid, reply)
+	// kv.updateRequestReply(args.RequestUid, reply)
 }

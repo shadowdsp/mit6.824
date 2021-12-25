@@ -24,15 +24,16 @@ func (kv *KVServer) Get(args *GetArgs, reply *GetReply) {
 func (kv *KVServer) handleGetRequest(args *GetArgs, reply *GetReply) {
 	defer func() { kv.requestDoneCh <- struct{}{} }()
 
-	requestedReply := kv.getRequestedReply(args.GetRequestUid())
-	if requestedReply != nil {
-		reply = requestedReply.(*GetReply)
-		return
-	}
+	// requestedReply := kv.getRequestedReply(args.GetRequestUid())
+	// if requestedReply != nil {
+	// 	reply = requestedReply.(*GetReply)
+	// 	return
+	// }
 
 	index, _, isLeader := kv.rf.Start(Op{
-		Name: "Get",
-		Key:  args.Key,
+		RequestUid: args.GetRequestUid(),
+		Name:       "Get",
+		Key:        args.Key,
 	})
 
 	if !isLeader {
@@ -51,5 +52,5 @@ func (kv *KVServer) handleGetRequest(args *GetArgs, reply *GetReply) {
 	} else {
 		reply.Err = ErrNoKey
 	}
-	kv.updateRequestReply(args.RequestUid, reply)
+	// kv.updateRequestReply(args.RequestUid, reply)
 }

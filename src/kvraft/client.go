@@ -2,7 +2,6 @@ package kvraft
 
 import (
 	"crypto/rand"
-	"fmt"
 	"math/big"
 	"sync"
 	"time"
@@ -12,7 +11,8 @@ import (
 )
 
 const (
-	RetryInterval = 10 * time.Millisecond
+	RetryInterval   = 10 * time.Millisecond
+	rpcTimeoutLimit = 50 * time.Millisecond
 )
 
 type Clerk struct {
@@ -21,8 +21,8 @@ type Clerk struct {
 	servers []*labrpc.ClientEnd
 	// You will have to modify this struct.
 	lastLeaderID int
-	requestID    int
-	uid          int64
+	serialID     int
+	clientID     int64
 }
 
 func nrand() int64 {
@@ -37,8 +37,8 @@ func MakeClerk(servers []*labrpc.ClientEnd) *Clerk {
 	ck.servers = servers
 	// You'll have to add code here.
 	ck.lastLeaderID = 0
-	ck.requestID = 0
-	ck.uid = nrand()
+	ck.serialID = 0
+	ck.clientID = nrand()
 	return ck
 }
 
@@ -55,57 +55,9 @@ func MakeClerk(servers []*labrpc.ClientEnd) *Clerk {
 // arguments. and reply must be passed as a pointer.
 //
 
-func (ck *Clerk) getRequestUid() string {
-	return fmt.Sprintf("%v-%v", ck.uid, ck.requestID)
-}
-
-func (ck *Clerk) getAndIncRequestID() int {
-	ck.requestID += 1
-	return ck.requestID
-}
-
-func (ck *Clerk) get(requestUid string, serverID int, key string) (string, bool) {
-	value, success := "", true
-
-	args := GetArgs{
-		RequestUid: requestUid,
-		Key:        key,
-	}
-	reply := GetReply{}
-	ok := ck.servers[serverID].Call(RpcNameGet, &args, &reply)
-	if !ok || reply.Err == ErrWrongLeader {
-		success = false
-	}
-	if ok {
-		value = reply.Value
-	}
-	return value, success
-}
-
-func (ck *Clerk) Get(key string) string {
-	// You will have to modify this function.
-	ck.mu.Lock()
-	ck.getAndIncRequestID()
-	requestUid := ck.getRequestUid()
-	log.Infof("[Clerk.Get] reqUID %v, key %v", requestUid, key)
-	ck.mu.Unlock()
-	for {
-		time.Sleep(RetryInterval)
-
-		if v, success := ck.get(requestUid, ck.lastLeaderID, key); success {
-			return v
-		}
-
-		for i := range ck.servers {
-			if i == ck.lastLeaderID {
-				continue
-			}
-			if v, success := ck.get(requestUid, i, key); success {
-				ck.lastLeaderID = i
-				return v
-			}
-		}
-	}
+func (ck *Clerk) getAndIncSerialID() int {
+	ck.serialID += 1
+	return ck.serialID
 }
 
 //
@@ -118,54 +70,63 @@ func (ck *Clerk) Get(key string) string {
 // must match the declared types of the RPC handler function's
 // arguments. and reply must be passed as a pointer.
 //
-func (ck *Clerk) putAppend(requestUid string, serverID int,
-	key string, value string, op string) bool {
 
+func (ck *Clerk) sendRequestToServer(op string, key string, value string, serverID int) (string, bool) {
 	success := true
-	args := PutAppendArgs{
-		RequestUid: requestUid,
-		Key:        key,
-		Value:      value,
-		Op:         op,
+	result := ""
+
+	args := Args{
+		Op:       op,
+		Key:      key,
+		Value:    value,
+		ClientID: ck.clientID,
+		SerialID: ck.serialID,
 	}
-	reply := PutAppendReply{}
-	ok := ck.servers[serverID].Call(RpcNamePutAppend, &args, &reply)
-	if !ok || reply.Err == ErrWrongLeader {
+	reply := Reply{}
+	// ok := ck.servers[serverID].Call(RpcNameKVRequest, &args, &reply)
+	err := RpcCallWithTimeout(ck.servers[serverID], RpcNameKVRequest, &args, &reply, rpcTimeoutLimit)
+
+	if err != nil || reply.Err == ErrWrongLeader {
 		success = false
+	} else if reply.Err == OK {
+		result = reply.Value
 	}
-	return success
+	return result, success
 }
 
-func (ck *Clerk) PutAppend(key string, value string, op string) {
-	// You will have to modify this function.
+func (ck *Clerk) sendRequest(op string, key string, value string) string {
 	ck.mu.Lock()
-	ck.getAndIncRequestID()
-	requestUid := ck.getRequestUid()
-	log.Infof("[Clerk.PutAppend] reqUID %v, key %v, value %v, op %v", requestUid, key, value, op)
+	ck.getAndIncSerialID()
+	log.Infof("[Clerk.sendRequest] ClientID %v, SerialID %v, key %v, value %v, op %v", ck.clientID, ck.serialID, key, value, op)
 	ck.mu.Unlock()
 	for {
 		time.Sleep(RetryInterval)
 
-		if success := ck.putAppend(requestUid, ck.lastLeaderID, key, value, op); success {
-			return
+		if result, success := ck.sendRequestToServer(op, key, value, ck.lastLeaderID); success {
+			return result
 		}
 
 		for i := range ck.servers {
 			if i == ck.lastLeaderID {
 				continue
 			}
-			if success := ck.putAppend(requestUid, i, key, value, op); success {
+			if result, success := ck.sendRequestToServer(op, key, value, i); success {
 				ck.lastLeaderID = i
-				return
+				return result
 			}
 		}
 	}
 }
 
+func (ck *Clerk) Get(key string) string {
+	// You will have to modify this function.
+	return ck.sendRequest("Get", key, "")
+}
+
 func (ck *Clerk) Put(key string, value string) {
-	ck.PutAppend(key, value, "Put")
+	ck.sendRequest("Put", key, value)
 }
 
 func (ck *Clerk) Append(key string, value string) {
-	ck.PutAppend(key, value, "Append")
+	ck.sendRequest("Append", key, value)
 }

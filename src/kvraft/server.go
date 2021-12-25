@@ -5,7 +5,6 @@ import (
 	"os"
 	"sync"
 	"sync/atomic"
-	"time"
 
 	"mit6.824/src/labgob"
 	"mit6.824/src/labrpc"
@@ -27,7 +26,8 @@ type Op struct {
 	// Your definitions here.
 	// Field names must start with capital letters,
 	// otherwise RPC will break.
-	RequestUid string
+	ClientID int64
+	SerialID int
 	// op name
 	Name string
 	// op key/value
@@ -48,8 +48,8 @@ type KVServer struct {
 	requestCh     chan Request
 	requestDoneCh chan struct{}
 
-	appliedRequestUid map[string]struct{}
-	appliedOp         map[int]Op
+	clientMaxSerialID map[int64]int
+	appliedOpCh       map[int]chan Op
 	store             map[string]string
 }
 
@@ -74,86 +74,39 @@ func (kv *KVServer) killed() bool {
 	return z == 1
 }
 
-// func (kv *KVServer) updateRequestReply(requestUid string, reply Reply) {
-// 	kv.mu.Lock()
-// 	defer kv.mu.Unlock()
-// 	if _, ok := kv.requestedReply[requestUid]; !ok && isReplySuccess(reply.GetErr()) {
-// 		kv.requestedReply[requestUid] = reply
-// 	}
-// }
+func (kv *KVServer) cleanUpIfKilled() {
+	kv.mu.Lock()
+	defer kv.mu.Unlock()
+	log.Infof("[cleanUpIfKilled] KV Server %v was killed", kv.me)
+	// defer func() {
+	// 	if recover() != nil {
+	// 	}
+	// }()
+	// close(kv.applyCh)
+}
 
-// func (kv *KVServer) getRequestedReply(requestUid string) interface{} {
-// 	kv.mu.Lock()
-// 	defer kv.mu.Unlock()
-// 	v, ok := kv.requestedReply[requestUid]
-// 	if !ok {
-// 		return nil
-// 	}
-// 	return v
-// }
-
-func (kv *KVServer) waitForIndexApplied(index int) {
-	for {
-		kv.mu.Lock()
-		_, ok := kv.appliedOp[index]
-		kv.mu.Unlock()
-		if ok {
-			break
+func (kv *KVServer) closeWaitCh(index int) {
+	kv.mu.Lock()
+	defer kv.mu.Unlock()
+	defer func() {
+		if recover() != nil {
 		}
-		time.Sleep(10 * time.Millisecond)
-	}
+	}()
+	close(kv.appliedOpCh[index])
+	kv.appliedOpCh[index] = nil
 }
 
 func (kv *KVServer) handleEvent() {
 	for {
 		if kv.killed() {
-			log.Infof("[handleEvent] KV Server %v was killed", kv.me)
+			kv.cleanUpIfKilled()
 			return
 		}
 
 		select {
 		case req := <-kv.requestCh:
-			switch req.Args.(type) {
-			case *GetArgs:
-				kv.handleGetRequest(req.Args.(*GetArgs), req.Reply.(*GetReply))
-			case *PutAppendArgs:
-				kv.handlePutAppendRequest(req.Args.(*PutAppendArgs), req.Reply.(*PutAppendReply))
-			}
+			kv.handleKVRequest(req.Args, req.Reply)
 		}
-	}
-}
-
-func (kv *KVServer) handleApplyCh() {
-	for msg := range kv.applyCh {
-		if kv.killed() {
-			log.Infof("[handleApplyCh] KV Server %v was killed", kv.me)
-			return
-		}
-
-		if !msg.CommandValid {
-			continue
-		}
-
-		kv.mu.Lock()
-		op := msg.Command.(Op)
-		if _, ok := kv.appliedRequestUid[op.RequestUid]; ok {
-			kv.mu.Unlock()
-			continue
-		}
-
-		switch op.Name {
-		// case OpNameGet:
-		case OpNamePut:
-			kv.store[op.Key] = op.Value
-		case OpNameAppend:
-			if _, ok := kv.store[op.Key]; !ok {
-				kv.store[op.Key] = ""
-			}
-			kv.store[op.Key] += op.Value
-		}
-		kv.appliedOp[msg.CommandIndex] = op
-		kv.appliedRequestUid[op.RequestUid] = struct{}{}
-		kv.mu.Unlock()
 	}
 }
 
@@ -186,8 +139,8 @@ func StartKVServer(servers []*labrpc.ClientEnd, me int, persister *raft.Persiste
 
 		requestCh:         make(chan Request),
 		requestDoneCh:     make(chan struct{}),
-		appliedRequestUid: make(map[string]struct{}),
-		appliedOp:         make(map[int]Op),
+		clientMaxSerialID: make(map[int64]int),
+		appliedOpCh:       make(map[int]chan Op),
 
 		store: make(map[string]string),
 	}
@@ -207,7 +160,7 @@ func init() {
 	log.SetOutput(os.Stdout)
 	// Only log the warning severity or above.
 	log.SetLevel(log.DebugLevel)
-	// log.SetLevel(log.InfoLevel)
+	log.SetLevel(log.InfoLevel)
 	// log.SetLevel(log.WarnLevel)
 	log.SetFormatter(&log.TextFormatter{
 		// DisableColors: true,

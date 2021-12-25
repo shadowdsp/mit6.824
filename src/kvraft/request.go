@@ -1,0 +1,95 @@
+package kvraft
+
+import (
+	"time"
+
+	log "github.com/sirupsen/logrus"
+)
+
+func (kv *KVServer) KVRequest(args *Args, reply *Reply) {
+	// Your code here.
+	// defer FuncLatency("KVServer.RPC.PutAppend", time.Now(), args, reply)
+
+	log.Infof("[KVRequest %v] Start! Server %v, ClientID: %v, SerialID: %v, args: %+v, reply: %+v",
+		args.Op, kv.me, args.ClientID, args.SerialID, args, reply)
+
+	kv.requestCh <- Request{
+		Args:  args,
+		Reply: reply,
+	}
+	<-kv.requestDoneCh
+
+	// if !isReplySuccess(reply.Err) {
+	log.Infof("[KVRequest %v] Finished! Server %v, ClientID: %v, SerialID: %v, args: %+v, reply: %+v",
+		args.Op, kv.me, args.ClientID, args.SerialID, args, reply)
+	// }
+}
+
+func (kv *KVServer) handleKVRequest(args *Args, reply *Reply) {
+	defer func() { kv.requestDoneCh <- struct{}{} }()
+	reply.Err = OK
+
+	kv.mu.Lock()
+	log.Infof("[handleKVRequest] Server %v handling request, args %+v", kv.me, args)
+	if serialID, ok := kv.clientMaxSerialID[args.ClientID]; ok && serialID >= args.SerialID {
+		if args.Op == OpNameGet {
+			if v, exist := kv.store[args.Key]; exist {
+				reply.Value = v
+			} else {
+				reply.Err = ErrNoKey
+			}
+		}
+		kv.mu.Unlock()
+		return
+	}
+	kv.mu.Unlock()
+
+	op := Op{
+		ClientID: args.GetClientID(),
+		SerialID: args.GetSerialID(),
+		Name:     args.Op,
+		Key:      args.Key,
+		Value:    args.Value,
+	}
+	log.Infof("[handleKVRequest] Server %v start to commit op %+v", kv.me, op)
+	index, _, isLeader := kv.rf.Start(op)
+
+	if !isLeader {
+		reply.Err = ErrWrongLeader
+		return
+	}
+
+	kv.mu.Lock()
+	waitCh := make(chan Op)
+	kv.appliedOpCh[index] = waitCh
+	kv.mu.Unlock()
+
+	log.Infof("[handleKVRequest] Server %v wait for applied op, index %+v, op %+v", kv.me, index, op)
+	select {
+	case appliedOp := <-waitCh:
+		if appliedOp.ClientID != args.ClientID || appliedOp.SerialID != args.SerialID {
+			reply.Err = ErrWrongLeader
+			return
+		}
+		kv.closeWaitCh(index)
+		break
+	case <-time.After(time.Millisecond * 5000):
+		log.Infof("[handleKVRequest] Server %v apply OP index %v timeout", kv.me, index)
+		reply.Err = ErrWrongLeader
+		if kv.killed() {
+			kv.cleanUpIfKilled()
+			return
+		}
+		kv.closeWaitCh(index)
+		return
+	}
+
+	kv.mu.Lock()
+	if v, exist := kv.store[args.Key]; exist {
+		reply.Value = v
+	} else {
+		reply.Err = ErrNoKey
+	}
+	log.Infof("[handleKVRequest] Server %v apply op successfully, index %+v, reply %+v", kv.me, index, reply)
+	kv.mu.Unlock()
+}

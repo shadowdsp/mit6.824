@@ -315,6 +315,19 @@ func (rf *Raft) killed() bool {
 	return z == 1
 }
 
+func (rf *Raft) cleanUpIfKilled() {
+	rf.mu.Lock()
+	defer rf.mu.Unlock()
+	log.Infof("Server %d was killed", rf.me)
+	defer func() {
+		if recover() != nil {
+		}
+	}()
+	close(rf.applyCh)
+	rf.stopTimer(rf.electionTimer)
+	rf.stopTimer(rf.heartbeatTimer)
+}
+
 func (rf *Raft) getElectionTimeout() time.Duration {
 	return time.Millisecond * time.Duration(
 		rand.Intn(electionTimeoutUpperBound-electionTimeoutLowerBound)+electionTimeoutLowerBound)
@@ -455,7 +468,7 @@ func (rf *Raft) updateState(state State) {
 func (rf *Raft) handleEvent() {
 	for {
 		if rf.killed() {
-			log.Debugf("Server %d was killed", rf.me)
+			rf.cleanUpIfKilled()
 			return
 		}
 		select {
@@ -485,9 +498,7 @@ func (rf *Raft) runTimerCron() {
 	rf.mu.Unlock()
 	for {
 		if rf.killed() {
-			log.Infof("Server %d was killed", rf.me)
-			rf.stopTimer(rf.electionTimer)
-			rf.stopTimer(rf.heartbeatTimer)
+			rf.cleanUpIfKilled()
 			return
 		}
 		select {

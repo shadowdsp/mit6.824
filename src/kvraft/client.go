@@ -12,7 +12,7 @@ import (
 
 const (
 	RetryInterval   = 10 * time.Millisecond
-	rpcTimeoutLimit = 50 * time.Millisecond
+	rpcTimeoutLimit = 1000 * time.Millisecond
 )
 
 type Clerk struct {
@@ -20,9 +20,9 @@ type Clerk struct {
 
 	servers []*labrpc.ClientEnd
 	// You will have to modify this struct.
-	lastLeaderID int
-	serialID     int
-	clientID     int64
+	leaderID int
+	serialID int
+	clientID int64
 }
 
 func nrand() int64 {
@@ -36,7 +36,7 @@ func MakeClerk(servers []*labrpc.ClientEnd) *Clerk {
 	ck := new(Clerk)
 	ck.servers = servers
 	// You'll have to add code here.
-	ck.lastLeaderID = 0
+	ck.leaderID = 0
 	ck.serialID = 0
 	ck.clientID = nrand()
 	return ck
@@ -75,6 +75,7 @@ func (ck *Clerk) sendRequestToServer(op string, key string, value string, server
 	success := true
 	result := ""
 
+	ck.mu.Lock()
 	args := Args{
 		Op:       op,
 		Key:      key,
@@ -83,6 +84,8 @@ func (ck *Clerk) sendRequestToServer(op string, key string, value string, server
 		SerialID: ck.serialID,
 	}
 	reply := Reply{}
+	ck.mu.Unlock()
+
 	// ok := ck.servers[serverID].Call(RpcNameKVRequest, &args, &reply)
 	err := RpcCallWithTimeout(ck.servers[serverID], RpcNameKVRequest, &args, &reply, rpcTimeoutLimit)
 
@@ -102,19 +105,13 @@ func (ck *Clerk) sendRequest(op string, key string, value string) string {
 	for {
 		time.Sleep(RetryInterval)
 
-		if result, success := ck.sendRequestToServer(op, key, value, ck.lastLeaderID); success {
+		if result, success := ck.sendRequestToServer(op, key, value, ck.leaderID); success {
 			return result
 		}
 
-		for i := range ck.servers {
-			if i == ck.lastLeaderID {
-				continue
-			}
-			if result, success := ck.sendRequestToServer(op, key, value, i); success {
-				ck.lastLeaderID = i
-				return result
-			}
-		}
+		ck.mu.Lock()
+		ck.leaderID = (ck.leaderID + 1) % len(ck.servers)
+		ck.mu.Unlock()
 	}
 }
 

@@ -6,6 +6,10 @@ import (
 	log "github.com/sirupsen/logrus"
 )
 
+const (
+	applyOpTimeoutLimit = time.Millisecond * 10000
+)
+
 func (kv *KVServer) KVRequest(args *Args, reply *Reply) {
 	// Your code here.
 	// defer FuncLatency("KVServer.RPC.PutAppend", time.Now(), args, reply)
@@ -73,7 +77,7 @@ func (kv *KVServer) handleKVRequest(args *Args, reply *Reply) {
 		}
 		kv.closeWaitCh(index)
 		break
-	case <-time.After(time.Millisecond * 5000):
+	case <-time.After(applyOpTimeoutLimit):
 		log.Infof("[handleKVRequest] Server %v apply OP index %v timeout", kv.me, index)
 		reply.Err = ErrWrongLeader
 		if kv.killed() {

@@ -78,11 +78,7 @@ func (kv *KVServer) cleanUpIfKilled() {
 	kv.mu.Lock()
 	defer kv.mu.Unlock()
 	log.Infof("[cleanUpIfKilled] KV Server %v was killed", kv.me)
-	// defer func() {
-	// 	if recover() != nil {
-	// 	}
-	// }()
-	// close(kv.applyCh)
+	kv.rf.Kill()
 }
 
 func (kv *KVServer) closeWaitCh(index int) {
@@ -161,7 +157,7 @@ func init() {
 	// Only log the warning severity or above.
 	log.SetLevel(log.DebugLevel)
 	log.SetLevel(log.InfoLevel)
-	// log.SetLevel(log.WarnLevel)
+	log.SetLevel(log.WarnLevel)
 	log.SetFormatter(&log.TextFormatter{
 		// DisableColors: true,
 		FullTimestamp: true,

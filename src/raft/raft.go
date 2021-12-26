@@ -52,6 +52,7 @@ type ApplyMsg struct {
 	CommandValid bool
 	Command      interface{}
 	CommandIndex int
+	CommandTerm  int
 }
 
 type Request struct {
@@ -73,6 +74,7 @@ const (
 	rpcTimeoutLimit           = 50 * time.Millisecond
 	rpcMethodAppendEntries    = "Raft.AppendEntries"
 	rpcMethodRequestVote      = "Raft.RequestVote"
+	rpcMethodInstallSnapshot  = "Raft.InstallSnapshot"
 )
 
 type State string
@@ -177,6 +179,29 @@ func (rf *Raft) persist() {
 	// 	rf.me, rf.currentTerm, rf.commitIndex, rf.logs)
 }
 
+func (rf *Raft) EncodeSnapshot(v Snapshot) []byte {
+	w := new(bytes.Buffer)
+	e := labgob.NewEncoder(w)
+	if err := e.Encode(v); err != nil {
+		log.Warnf("[EncodeSnapshot] Failed to encode: %v", err)
+	}
+	return w.Bytes()
+}
+
+func (rf *Raft) DecodeSnapshot(data []byte) Snapshot {
+	snapshot := Snapshot{}
+
+	if data == nil || len(data) < 1 { // bootstrap without any state?
+		return snapshot
+	}
+	r := bytes.NewBuffer(data)
+	d := labgob.NewDecoder(r)
+	if err := d.Decode(&snapshot); err != nil {
+		log.Warnf("[DecodeSnapshot] Failed to decode snapshot: %v", err)
+	}
+	return snapshot
+}
+
 //
 // restore previously persisted state.
 //
@@ -262,6 +287,10 @@ func (rf *Raft) sendAppendEntriesWithTimeout(server int, args *AppendEntriesArgs
 	return RpcCallWithTimeout(rf.peers[server], rpcMethodAppendEntries, args, reply, rpcTimeoutLimit)
 }
 
+func (rf *Raft) sendInstallSnapshotWithTimeout(server int, args *InstallSnapshotArgs, reply *InstallSnapshotReply) error {
+	return RpcCallWithTimeout(rf.peers[server], rpcMethodInstallSnapshot, args, reply, rpcTimeoutLimit)
+}
+
 //
 // the service using Raft (e.g. a k/v server) wants to start
 // agreement on the next command to be appended to Raft's log. if this
@@ -286,12 +315,67 @@ func (rf *Raft) Start(command interface{}) (int, int, bool) {
 		return index, term, isLeader
 	}
 
-	entry := &LogEntry{Command: command, Term: term}
+	entry := &LogEntry{
+		Command: command,
+		Term:    term,
+		Index:   index,
+		Id:      rf.logs.LastId() + 1,
+	}
 	rf.logs = append(rf.logs, entry)
 	rf.nextIndex[rf.me] = rf.logs.LastIndex() + 1
 	rf.matchIndex[rf.me] = rf.logs.LastIndex()
 	log.Infof("[Start] Leader %v start to append log[%v] %+v", rf.me, index, entry)
 	return index, term, isLeader
+}
+
+type Snapshot struct {
+	LastIncludedIndex int
+	LastIncludedTerm  int
+	Store             map[string]string
+}
+
+func (rf *Raft) DoSnapshot(snapshot Snapshot) {
+	rf.mu.Lock()
+
+	snapshotData := rf.EncodeSnapshot(snapshot)
+	rf.persister.SaveSnapshot(snapshotData)
+
+	lastIncludedIndex := snapshot.LastIncludedIndex
+	includedLog := rf.logs.GetByIndex(lastIncludedIndex)
+	rf.logs = rf.logs[includedLog.Id+1:]
+
+	state := rf.state
+	rf.mu.Unlock()
+
+	if state != Leader {
+		return
+	}
+
+	// leader should send InstallSnapshot
+	for serverID := range rf.peers {
+		rf.mu.Lock()
+		matchIndex := rf.matchIndex[serverID]
+		if matchIndex < lastIncludedIndex {
+			args := &InstallSnapshotArgs{
+				Term:              rf.currentTerm,
+				LeaderID:          rf.me,
+				LastIncludedIndex: lastIncludedIndex,
+				LastIncludedTerm:  snapshot.LastIncludedTerm,
+				Data:              snapshotData,
+			}
+			reply := &InstallSnapshotReply{}
+			rf.mu.Unlock()
+			go func(serverID int) {
+				if err := rf.sendInstallSnapshotWithTimeout(serverID, args, reply); err != nil {
+					return
+				}
+				rf.ReplyCh <- reply
+			}(serverID)
+		} else {
+			rf.mu.Unlock()
+		}
+	}
+	return
 }
 
 //
@@ -409,10 +493,11 @@ func (rf *Raft) sendHeartbeat() {
 
 		rf.mu.Lock()
 		prevLogIndex := rf.nextIndex[serverID] - 1
-		prevLogTerm := rf.logs.Get(prevLogIndex).Term
+		prevLog := rf.logs.GetByIndex(prevLogIndex)
+		prevLogTerm := prevLog.Term
 		logsToAppend := LogEntries{}
-		for i := prevLogIndex + 1; i <= rf.logs.LastIndex(); i++ {
-			logsToAppend = append(logsToAppend, rf.logs.Get(i))
+		for i := prevLog.Id + 1; i <= rf.logs.LastId(); i++ {
+			logsToAppend = append(logsToAppend, rf.logs.GetById(i))
 		}
 		args := &AppendEntriesArgs{
 			Term:         rf.currentTerm,
@@ -553,11 +638,12 @@ func (rf *Raft) run() {
 func (rf *Raft) apply() {
 	for rf.lastApplied < rf.commitIndex {
 		index := rf.lastApplied + 1
-		entry := rf.logs.Get(index)
+		entry := rf.logs.GetByIndex(index)
 		applyMsg := ApplyMsg{
 			CommandValid: true,
 			Command:      entry.Command,
 			CommandIndex: index,
+			CommandTerm:  entry.Term,
 		}
 		log.Infof("[applyCh] Server %v start to apply log %+v, message %+v", rf.me, entry, applyMsg)
 		rf.applyCh <- applyMsg

@@ -46,7 +46,7 @@ func (rf *Raft) handleAppendEntriesRequest(args *AppendEntriesArgs, reply *Appen
 	rf.mu.Lock()
 	defer rf.mu.Unlock()
 	log.Debugf("[handleAppendEntriesRequest] Before: Server %v state: %v, currentTerm: %v, prevLog: %+v, args: %+v",
-		rf.me, rf.state, rf.currentTerm, rf.logs.Get(args.PrevLogIndex), args)
+		rf.me, rf.state, rf.currentTerm, rf.logs.GetByIndex(args.PrevLogIndex), args)
 
 	reply.Term = rf.currentTerm
 	reply.Success = true
@@ -66,16 +66,16 @@ func (rf *Raft) handleAppendEntriesRequest(args *AppendEntriesArgs, reply *Appen
 	rf.resetElectionTimer()
 
 	// Rule 2: Reply false if log doesn’t contain an entry at prevLogIndex whose term matches prevLogTerm
-	if prevLog := rf.logs.Get(args.PrevLogIndex); prevLog == nil || prevLog.Term != args.PrevLogTerm {
+	if prevLog := rf.logs.GetByIndex(args.PrevLogIndex); prevLog == nil || prevLog.Term != args.PrevLogTerm {
 		matchLogIndex := args.PrevLogIndex
 		for ; matchLogIndex > 0; matchLogIndex-- {
-			if prevLog := rf.logs.Get(matchLogIndex); prevLog != nil && prevLog.Term == args.PrevLogTerm {
+			if prevLog := rf.logs.GetByIndex(matchLogIndex); prevLog != nil && prevLog.Term == args.PrevLogTerm {
 				break
 			}
 		}
 		reply.Success = false
 		reply.LogInconsistent = true
-		reply.PrevLogIndex = matchLogIndex
+		reply.PrevLogIndex = rf.logs.GetByIndex(matchLogIndex).Index
 		return
 	}
 	// Here we don't use rf.logs.LastIndex(), because follower's last log index can be bigger than leader's.
@@ -84,16 +84,21 @@ func (rf *Raft) handleAppendEntriesRequest(args *AppendEntriesArgs, reply *Appen
 	// Rule 3: If an existing entry conflicts with a new one (same index but different terms),
 	// delete the existing entry and all that follow it
 	// Rule 4: Append any new entries not already in the log
-	for i := range args.Logs {
-		// The log at prevLogIndex is the same as leader, we should check the logs after prevLogIndex
-		index := i + args.PrevLogIndex + 1
-		if entry := rf.logs.Get(index); entry != nil && entry.Term != args.Logs.Get(i).Term {
-			rf.logs = rf.logs[:index]
-		}
-		if index > rf.logs.LastIndex() {
-			rf.logs = append(rf.logs, args.Logs.Get(i))
-		} else {
-			rf.logs[index] = args.Logs.Get(i)
+	if len(args.Logs) > 0 {
+		if prevLog := rf.logs.GetByIndex(args.PrevLogIndex); prevLog != nil {
+			for i := range args.Logs {
+				// The log at prevLogIndex is the same as leader, we should check the logs after prevLogIndex
+				logId := i + prevLog.Id + 1
+				if entry := rf.logs.GetById(logId); entry != nil && entry.Term != args.Logs.GetById(i).Term {
+					rf.logs = rf.logs[:logId]
+				}
+				if logId > rf.logs.LastId() {
+					rf.logs = append(rf.logs, args.Logs.GetById(i))
+				} else {
+					rf.logs[logId] = args.Logs.GetById(i)
+				}
+				rf.logs[logId].Id = logId
+			}
 		}
 	}
 
@@ -131,7 +136,7 @@ func (rf *Raft) handleAppendEntriesReply(reply *AppendEntriesReply) {
 			count++
 		}
 	}
-	if rf.isMajorityNum(count) && rf.logs.Get(matchIndex).Term == rf.currentTerm && matchIndex > rf.commitIndex {
+	if rf.isMajorityNum(count) && rf.logs.GetByIndex(matchIndex).Term == rf.currentTerm && matchIndex > rf.commitIndex {
 		log.Debugf("Leader %v in term %v updatedCommitIndex %v", rf.me, rf.currentTerm, matchIndex)
 		rf.commitIndex = matchIndex
 	}

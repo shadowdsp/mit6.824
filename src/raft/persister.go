@@ -57,6 +57,14 @@ func (ps *Persister) SaveStateAndSnapshot(state []byte, snapshot []byte) {
 	ps.snapshot = snapshot
 }
 
+// Save K/V snapshot as a single atomic action,
+// to help avoid them getting out of sync.
+func (ps *Persister) SaveSnapshot(snapshot []byte) {
+	ps.mu.Lock()
+	defer ps.mu.Unlock()
+	ps.snapshot = snapshot
+}
+
 func (ps *Persister) ReadSnapshot() []byte {
 	ps.mu.Lock()
 	defer ps.mu.Unlock()

@@ -1,6 +1,7 @@
 package kvraft
 
 import (
+	"bytes"
 	"net/http"
 	"os"
 	"sync"
@@ -42,6 +43,7 @@ type KVServer struct {
 	applyCh chan raft.ApplyMsg
 	dead    int32 // set by Kill()
 
+	persister    *raft.Persister
 	maxraftstate int // snapshot if log grows this big
 
 	// Your definitions here.
@@ -50,7 +52,10 @@ type KVServer struct {
 
 	clientMaxSerialID map[int64]int
 	appliedOpCh       map[int]chan Op
+
 	store             map[string]string
+	lastIncludedTerm  int
+	lastIncludedIndex int
 }
 
 //
@@ -72,6 +77,43 @@ func (kv *KVServer) Kill() {
 func (kv *KVServer) killed() bool {
 	z := atomic.LoadInt32(&kv.dead)
 	return z == 1
+}
+
+func (kv *KVServer) saveSnapshot() {
+	w := new(bytes.Buffer)
+	e := labgob.NewEncoder(w)
+
+	snapshot := &Snapshot{
+		LastIncludedIndex: kv.lastIncludedIndex,
+		LastIncludedTerm:  kv.lastIncludedTerm,
+		Store:             kv.store,
+	}
+	if err := e.Encode(snapshot); err != nil {
+		log.Warnf("[saveSnapshot] Failed to encode snapshot: %v", err)
+	}
+	data := w.Bytes()
+	kv.persister.SaveSnapshot(data)
+}
+
+func (kv *KVServer) restoreSnapshot(data []byte) {
+	kv.mu.Lock()
+	defer kv.mu.Unlock()
+
+	if data == nil || len(data) < 1 { // bootstrap without any state?
+		return
+	}
+	r := bytes.NewBuffer(data)
+	d := labgob.NewDecoder(r)
+
+	var snapshot Snapshot
+	if err := d.Decode(&snapshot); err != nil {
+		log.Warnf("[readPersist] failed to decode, error: %v", err)
+	}
+	kv.lastIncludedIndex = snapshot.LastIncludedIndex
+	kv.lastIncludedTerm = snapshot.LastIncludedTerm
+	kv.store = snapshot.Store
+	log.Infof("[restoreSnapshot] Server[%v] restore snapshot, lastIncludedIndex: %v, lastIncludedTerm: %v, store: %+v",
+		kv.lastIncludedIndex, kv.lastIncludedTerm, kv.store)
 }
 
 func (kv *KVServer) cleanUpIfKilled() {
@@ -132,6 +174,7 @@ func StartKVServer(servers []*labrpc.ClientEnd, me int, persister *raft.Persiste
 		maxraftstate: maxraftstate,
 		applyCh:      applyCh,
 		rf:           raft.Make(servers, me, persister, applyCh),
+		persister:    persister,
 
 		requestCh:         make(chan Request),
 		requestDoneCh:     make(chan struct{}),

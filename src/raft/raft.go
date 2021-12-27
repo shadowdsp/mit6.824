@@ -105,7 +105,10 @@ type Raft struct {
 	state State
 
 	// Persistent state on server
-	currentTerm int
+	currentTerm       int
+	lastIncludedIndex int
+	lastIncludedTerm  int
+
 	// votedFor initial state is -1
 	votedFor int
 	voteNums int
@@ -171,6 +174,12 @@ func (rf *Raft) persist() {
 	if err := e.Encode(rf.logs); err != nil {
 		log.Warnf("[persist] Failed to encode logs: %v", err)
 	}
+	if err := e.Encode(rf.lastIncludedIndex); err != nil {
+		log.Warnf("[persist] Failed to encode lastIncludedIndex: %v", err)
+	}
+	if err := e.Encode(rf.lastIncludedTerm); err != nil {
+		log.Warnf("[persist] Failed to encode lastIncludedTerm: %v", err)
+	}
 	data := w.Bytes()
 	rf.persister.SaveRaftState(data)
 	// log.Infof("[persist] Server[%v] persist state, term: %v, commitIndex: %v, log: %+v",
@@ -191,7 +200,7 @@ func (rf *Raft) readPersist(data []byte) {
 	// Example:
 	r := bytes.NewBuffer(data)
 	d := labgob.NewDecoder(r)
-	var currentTerm, votedFor int
+	var currentTerm, votedFor, lastIncludedIndex, lastIncludedTerm int
 	var logs LogEntries
 
 	decodeValues := func(values []interface{}) error {
@@ -202,14 +211,16 @@ func (rf *Raft) readPersist(data []byte) {
 		}
 		return nil
 	}
-	if err := decodeValues([]interface{}{&currentTerm, &votedFor, &logs}); err != nil {
+	if err := decodeValues([]interface{}{&currentTerm, &votedFor, &logs, &lastIncludedIndex, &lastIncludedTerm}); err != nil {
 		log.Warnf("[readPersist] failed to decode, error: %v", err)
 	}
 	rf.currentTerm = currentTerm
 	rf.votedFor = votedFor
 	rf.logs = logs
-	log.Infof("[readPersist] Server[%v] read persist, term: %v, commitIndex: %v, log: %+v",
-		rf.me, rf.currentTerm, rf.commitIndex, rf.logs)
+	rf.lastIncludedIndex = lastIncludedIndex
+	rf.lastIncludedTerm = lastIncludedTerm
+	log.Infof("[readPersist] Server[%v] read persist, term: %v, commitIndex: %v, log: %+v, lastIncludedIndex: %v, lastIncludedTerm: %v",
+		rf.me, rf.currentTerm, rf.commitIndex, rf.logs, rf.lastIncludedIndex, rf.lastIncludedTerm)
 }
 
 func (rf *Raft) isTermOutdateAndUpdateState(term int) bool {
@@ -281,16 +292,16 @@ func (rf *Raft) Start(command interface{}) (int, int, bool) {
 	rf.mu.Lock()
 	defer rf.mu.Unlock()
 
-	index, term, isLeader := rf.logs.LastIndex()+1, rf.currentTerm, (rf.state == Leader)
+	index, term, isLeader := rf.getLastLogIndex()+1, rf.currentTerm, (rf.state == Leader)
 	if !isLeader {
 		return index, term, isLeader
 	}
 
 	entry := &LogEntry{Command: command, Term: term}
 	rf.logs = append(rf.logs, entry)
-	rf.nextIndex[rf.me] = rf.logs.LastIndex() + 1
-	rf.matchIndex[rf.me] = rf.logs.LastIndex()
-	log.Infof("[Start] Leader %v start to append log[%v] %+v", rf.me, index, entry)
+	rf.nextIndex[rf.me] = rf.getLastLogIndex() + 1
+	rf.matchIndex[rf.me] = rf.getLastLogIndex()
+	log.Infof("[Start] Leader %v start to append log[%v] %+v, all logs: %+v", rf.me, index, entry, rf.logs)
 	return index, term, isLeader
 }
 
@@ -385,8 +396,8 @@ func (rf *Raft) electLeader() {
 		args := &RequestVoteArgs{
 			Term:         rf.currentTerm,
 			CandidateID:  rf.me,
-			LastLogIndex: rf.logs.LastIndex(),
-			LastLogTerm:  rf.logs.GetLast().Term,
+			LastLogIndex: rf.getLastLogIndex(),
+			LastLogTerm:  rf.getLastLog().Term,
 		}
 		log.Debugf("[Candidate] Server %v sendRequestVote to server %d, args: %+v", rf.me, serverID, args)
 		rf.mu.Unlock()
@@ -409,10 +420,10 @@ func (rf *Raft) sendHeartbeat() {
 
 		rf.mu.Lock()
 		prevLogIndex := rf.nextIndex[serverID] - 1
-		prevLogTerm := rf.logs.Get(prevLogIndex).Term
+		prevLogTerm := rf.getLogByIndex(prevLogIndex).Term
 		logsToAppend := LogEntries{}
-		for i := prevLogIndex + 1; i <= rf.logs.LastIndex(); i++ {
-			logsToAppend = append(logsToAppend, rf.logs.Get(i))
+		for i := prevLogIndex + 1; i <= rf.getLastLogIndex(); i++ {
+			logsToAppend = append(logsToAppend, rf.getLogByIndex(i))
 		}
 		args := &AppendEntriesArgs{
 			Term:         rf.currentTerm,
@@ -449,7 +460,7 @@ func (rf *Raft) updateState(state State) {
 	log.Infof("[updateState] server %v term: %v, old state: %v, new state: %v", rf.me, rf.currentTerm, rf.state, state)
 	if state == Leader {
 		for i := 0; i < len(rf.peers); i++ {
-			rf.nextIndex[i] = rf.logs.LastIndex() + 1
+			rf.nextIndex[i] = rf.getLastLogIndex() + 1
 			rf.matchIndex[i] = 0
 		}
 		rf.resetHeatbeatTimer()
@@ -553,7 +564,7 @@ func (rf *Raft) run() {
 func (rf *Raft) apply() {
 	for rf.lastApplied < rf.commitIndex {
 		index := rf.lastApplied + 1
-		entry := rf.logs.Get(index)
+		entry := rf.getLogByIndex(index)
 		applyMsg := ApplyMsg{
 			CommandValid: true,
 			Command:      entry.Command,
@@ -579,13 +590,15 @@ func (rf *Raft) apply() {
 func Make(peers []*labrpc.ClientEnd, me int,
 	persister *Persister, applyCh chan ApplyMsg) *Raft {
 	rf := &Raft{
-		peers:       peers,
-		persister:   persister,
-		me:          me,
-		state:       Follower,
-		votedFor:    -1,
-		logs:        LogEntries{&LogEntry{Command: nil, Term: -1}},
-		currentTerm: 0,
+		peers:             peers,
+		persister:         persister,
+		me:                me,
+		state:             Follower,
+		votedFor:          -1,
+		logs:              LogEntries{&LogEntry{Command: nil, Term: -1}},
+		currentTerm:       0,
+		lastIncludedIndex: 0,
+		lastIncludedTerm:  0,
 
 		// volatile state on servers
 		commitIndex: 0,

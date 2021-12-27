@@ -14,17 +14,21 @@ func (l *LogEntry) String() string {
 
 type LogEntries []*LogEntry
 
-func (le LogEntries) LastIndex() int { return len(le) - 1 }
+func (rf *Raft) getLogIndex(index int) int { return index - rf.lastIncludedIndex }
 
-func (le LogEntries) Get(i int) *LogEntry {
-	if 0 <= i && i <= le.LastIndex() {
-		return le[i]
+func (rf *Raft) getLogByIndex(index int) *LogEntry {
+	if index > rf.getLastLogIndex() {
+		return nil
 	}
-	return nil
+	return rf.logs[rf.getLogIndex(index)]
 }
 
-func (le LogEntries) GetLast() *LogEntry { return le.Get(le.LastIndex()) }
+func (rf *Raft) getLastLogIndex() int {
+	return rf.lastIncludedIndex + len(rf.logs) - 1
+}
 
-func (le LogEntries) Append(entry *LogEntry) LogEntries {
-	return append(le, entry)
+func (rf *Raft) getLastLog() *LogEntry { return rf.logs[rf.getLastLogIndex()] }
+
+func (rf *Raft) setLogByIndex(index int, e *LogEntry) {
+	rf.logs[rf.getLogIndex(index)] = e
 }

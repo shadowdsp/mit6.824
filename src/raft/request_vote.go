@@ -47,7 +47,7 @@ func (rf *Raft) handleRequestVoteRequest(args *RequestVoteArgs, reply *RequestVo
 	defer rf.mu.Unlock()
 
 	log.Debugf("[handleRequestVoteRequest] Start: Server %v state: %v, commitIndex: %v, lastLogIndex: %v, currentTerm: %v, voteFor: %v,  args: %+v, timestamp: %v",
-		rf.me, rf.state, rf.commitIndex, rf.logs.LastIndex(), rf.currentTerm, rf.votedFor, args, time.Now().UnixNano())
+		rf.me, rf.state, rf.commitIndex, rf.getLastLogIndex(), rf.currentTerm, rf.votedFor, args, time.Now().UnixNano())
 
 	reply.ServerID = rf.me
 	reply.VoteGranted = false
@@ -63,7 +63,7 @@ func (rf *Raft) handleRequestVoteRequest(args *RequestVoteArgs, reply *RequestVo
 		// Raft determines which of two logs is more up-to-date by comparing the index and term of the last entries in the logs.
 		// If the logs have last entries with different terms, then the log with the later term is more up-to-date.
 		// If the logs end with the same term, then whichever log is longer is more up-to-date.
-		if lastLog := rf.logs.GetLast(); args.LastLogTerm > lastLog.Term || args.LastLogTerm == lastLog.Term && args.LastLogIndex >= rf.logs.LastIndex() {
+		if lastLog := rf.getLastLog(); args.LastLogTerm > lastLog.Term || args.LastLogTerm == lastLog.Term && args.LastLogIndex >= rf.getLastLogIndex() {
 			reply.VoteGranted = true
 			rf.votedFor = args.CandidateID
 			rf.resetElectionTimer()

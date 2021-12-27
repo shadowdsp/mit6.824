@@ -46,7 +46,7 @@ func (rf *Raft) handleAppendEntriesRequest(args *AppendEntriesArgs, reply *Appen
 	rf.mu.Lock()
 	defer rf.mu.Unlock()
 	log.Debugf("[handleAppendEntriesRequest] Before: Server %v state: %v, currentTerm: %v, prevLog: %+v, args: %+v",
-		rf.me, rf.state, rf.currentTerm, rf.logs.Get(args.PrevLogIndex), args)
+		rf.me, rf.state, rf.currentTerm, rf.getLogByIndex(args.PrevLogIndex), args)
 
 	reply.Term = rf.currentTerm
 	reply.Success = true
@@ -66,10 +66,10 @@ func (rf *Raft) handleAppendEntriesRequest(args *AppendEntriesArgs, reply *Appen
 	rf.resetElectionTimer()
 
 	// Rule 2: Reply false if log doesn’t contain an entry at prevLogIndex whose term matches prevLogTerm
-	if prevLog := rf.logs.Get(args.PrevLogIndex); prevLog == nil || prevLog.Term != args.PrevLogTerm {
+	if prevLog := rf.getLogByIndex(args.PrevLogIndex); prevLog == nil || prevLog.Term != args.PrevLogTerm {
 		matchLogIndex := args.PrevLogIndex
 		for ; matchLogIndex > 0; matchLogIndex-- {
-			if prevLog := rf.logs.Get(matchLogIndex); prevLog != nil && prevLog.Term == args.PrevLogTerm {
+			if prevLog := rf.getLogByIndex(matchLogIndex); prevLog != nil && prevLog.Term == args.PrevLogTerm {
 				break
 			}
 		}
@@ -87,19 +87,19 @@ func (rf *Raft) handleAppendEntriesRequest(args *AppendEntriesArgs, reply *Appen
 	for i := range args.Logs {
 		// The log at prevLogIndex is the same as leader, we should check the logs after prevLogIndex
 		index := i + args.PrevLogIndex + 1
-		if entry := rf.logs.Get(index); entry != nil && entry.Term != args.Logs.Get(i).Term {
+		if entry := rf.getLogByIndex(index); entry != nil && entry.Term != args.Logs[i].Term {
 			rf.logs = rf.logs[:index]
 		}
-		if index > rf.logs.LastIndex() {
-			rf.logs = append(rf.logs, args.Logs.Get(i))
+		if index > rf.getLastLogIndex() {
+			rf.logs = append(rf.logs, args.Logs[i])
 		} else {
-			rf.logs[index] = args.Logs.Get(i)
+			rf.setLogByIndex(index, args.Logs[i])
 		}
 	}
 
 	// Rule 5: If leaderCommit > commitIndex, set commitIndex = min(leaderCommit, index of last new entry)
 	if args.LeaderCommit > rf.commitIndex {
-		rf.commitIndex = min(args.LeaderCommit, rf.logs.LastIndex())
+		rf.commitIndex = min(args.LeaderCommit, rf.getLastLogIndex())
 	}
 	rf.persist()
 	rf.apply()
@@ -131,7 +131,7 @@ func (rf *Raft) handleAppendEntriesReply(reply *AppendEntriesReply) {
 			count++
 		}
 	}
-	if rf.isMajorityNum(count) && rf.logs.Get(matchIndex).Term == rf.currentTerm && matchIndex > rf.commitIndex {
+	if rf.isMajorityNum(count) && rf.getLogByIndex(matchIndex).Term == rf.currentTerm && matchIndex > rf.commitIndex {
 		log.Debugf("Leader %v in term %v updatedCommitIndex %v", rf.me, rf.currentTerm, matchIndex)
 		rf.commitIndex = matchIndex
 	}

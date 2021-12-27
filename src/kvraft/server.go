@@ -50,6 +50,7 @@ type KVServer struct {
 
 	clientMaxSerialID map[int64]int
 	appliedOpCh       map[int]chan Op
+	lastAppliedIndex  int
 	store             map[string]string
 }
 
@@ -93,17 +94,13 @@ func (kv *KVServer) closeWaitCh(index int) {
 }
 
 func (kv *KVServer) handleEvent() {
-	for {
-		if kv.killed() {
-			kv.cleanUpIfKilled()
-			return
-		}
-
+	for !kv.killed() {
 		select {
 		case req := <-kv.requestCh:
 			kv.handleKVRequest(req.Args, req.Reply)
 		}
 	}
+	kv.cleanUpIfKilled()
 }
 
 //
@@ -126,19 +123,18 @@ func StartKVServer(servers []*labrpc.ClientEnd, me int, persister *raft.Persiste
 	labgob.Register(Op{})
 
 	// You may need initialization code here.
-	applyCh := make(chan raft.ApplyMsg)
+	applyCh := make(chan raft.ApplyMsg, 1)
 	kv := &KVServer{
 		me:           me,
 		maxraftstate: maxraftstate,
 		applyCh:      applyCh,
 		rf:           raft.Make(servers, me, persister, applyCh),
 
-		requestCh:         make(chan Request),
-		requestDoneCh:     make(chan struct{}),
-		clientMaxSerialID: make(map[int64]int),
-		appliedOpCh:       make(map[int]chan Op),
-
-		store: make(map[string]string),
+		requestCh:     make(chan Request),
+		requestDoneCh: make(chan struct{}),
+		// clientMaxSerialID: make(map[int64]int),
+		appliedOpCh: make(map[int]chan Op),
+		// store:             make(map[string]string),
 	}
 
 	// You may need initialization code here.

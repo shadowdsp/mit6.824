@@ -14,9 +14,10 @@ func (kv *KVServer) handleApplyCh() {
 		}
 
 		if !msg.CommandValid {
-			continue
+			kv.applySnapshot(msg.Data, msg.LastIncludedIndex)
+		} else {
+			kv.applyOp(msg.CommandIndex, msg.Command.(Op))
 		}
-		kv.applyOp(msg.CommandIndex, msg.Command.(Op))
 	}
 }
 
@@ -25,7 +26,7 @@ func (kv *KVServer) applyOp(index int, op Op) {
 	kv.mu.Lock()
 	defer kv.mu.Unlock()
 
-	log.Infof("[applyOp] Server %v applied in index %v, op %+v", kv.me, index, op)
+	log.Infof("[applyOp] KVServer %v applying index %v, op %+v", kv.me, index, op)
 
 	if serialID, ok := kv.clientMaxSerialID[op.ClientID]; !ok || serialID < op.SerialID {
 		switch op.Name {
@@ -39,6 +40,7 @@ func (kv *KVServer) applyOp(index int, op Op) {
 			kv.store[op.Key] += op.Value
 		}
 		kv.clientMaxSerialID[op.ClientID] = op.SerialID
+		kv.lastAppliedIndex = index
 	}
 
 	if waitCh, ok := kv.appliedOpCh[index]; ok {
@@ -49,4 +51,14 @@ func (kv *KVServer) applyOp(index int, op Op) {
 		log.Infof("[applyOp] Server %v failed to find index %v in appliedOpCh, op %+v",
 			kv.me, index, op)
 	}
+}
+
+func (kv *KVServer) applySnapshot(data []byte, lastIncludedIndex int) {
+	kv.mu.Lock()
+	defer kv.mu.Unlock()
+
+	kv.store, kv.clientMaxSerialID = kv.decodeSnapshot(data)
+	kv.lastAppliedIndex = lastIncludedIndex
+	log.Infof("[applySnapshot] KVServer %v applied snapshot, index: %v, store %+v, clientMaxSerialID %+v",
+		kv.me, lastIncludedIndex, kv.store, kv.clientMaxSerialID)
 }

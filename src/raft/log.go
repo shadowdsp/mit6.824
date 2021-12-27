@@ -32,3 +32,7 @@ func (rf *Raft) getLastLog() *LogEntry { return rf.logs[rf.getLastLogIndex()] }
 func (rf *Raft) setLogByIndex(index int, e *LogEntry) {
 	rf.logs[rf.getLogIndex(index)] = e
 }
+
+func (rf *Raft) getEmptyLogs() LogEntries {
+	return LogEntries{&LogEntry{Command: nil, Term: -1}}
+}

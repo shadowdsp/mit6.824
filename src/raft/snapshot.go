@@ -9,7 +9,10 @@ type InstallSnapshotArgs struct {
 }
 
 type InstallSnapshotReply struct {
-	Term int
+	Term              int
+	ServerID          int
+	LastIncludedIndex int
+	ReplicatedIndex   int
 }
 
 func (rf *Raft) InstallSnapshot(args *InstallSnapshotArgs, reply *InstallSnapshotReply) {
@@ -25,6 +28,9 @@ func (rf *Raft) handleInstallSnapshotRequest(args *InstallSnapshotArgs, reply *I
 	rf.mu.Lock()
 	defer rf.mu.Unlock()
 	reply.Term = rf.currentTerm
+	reply.ServerID = rf.me
+	reply.ReplicatedIndex = rf.getLastLogIndex()
+	reply.LastIncludedIndex = rf.lastApplied
 
 	// Rule 1: Reply false if term < currentTerm
 	if args.Term < rf.currentTerm {
@@ -33,11 +39,31 @@ func (rf *Raft) handleInstallSnapshotRequest(args *InstallSnapshotArgs, reply *I
 	}
 	rf.isTermOutdateAndUpdateState(args.Term)
 
-	// if args.LastIncludedIndex
+	if args.LastIncludedIndex >= rf.getLastLogIndex() {
+		rf.logs = rf.getEmptyLogs()
+	} else {
+		tmpLogs := rf.getEmptyLogs()
+		tmpLogs = append(tmpLogs, rf.logs[args.LastIncludedIndex+1:]...)
+		rf.logs = tmpLogs
+	}
+	rf.lastIncludedIndex = args.LastIncludedIndex
+	rf.lastIncludedTerm = args.LastIncludedTerm
+	rf.commitIndex = args.LastIncludedIndex
+	rf.persist()
+	rf.persister.SaveSnapshot(args.Data)
+	rf.installServerSnapshot(args.Data)
+	rf.lastApplied = args.LastIncludedIndex
+	reply.ReplicatedIndex = rf.getLastLogIndex()
+	reply.LastIncludedIndex = rf.lastApplied
 }
 
 func (rf *Raft) handleInstallSnapshotReply(reply *InstallSnapshotReply) {
 	rf.mu.Lock()
 	defer rf.mu.Unlock()
-	rf.isTermOutdateAndUpdateState(reply.Term)
+
+	if rf.isTermOutdateAndUpdateState(reply.Term) {
+		return
+	}
+	rf.nextIndex[reply.ServerID] = reply.ReplicatedIndex
+	rf.matchIndex[reply.ServerID] = reply.LastIncludedIndex
 }

@@ -241,7 +241,7 @@ func (rf *Raft) truncateLog(lastAppliedIndex int) {
 	rf.logs = tmpLog
 }
 
-func (rf *Raft) installSnapshot(data []byte) {
+func (rf *Raft) installServerSnapshot(data []byte) {
 	rf.applyCh <- ApplyMsg{
 		CommandValid:      false,
 		Data:              data,
@@ -506,6 +506,7 @@ func (rf *Raft) sendHeartbeat() {
 				if err := rf.sendInstallSnapshotWithTimeout(serverID, args, reply); err != nil {
 					return
 				}
+				rf.ReplyCh <- reply
 			}(serverID)
 		}
 	}

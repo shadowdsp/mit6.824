@@ -104,6 +104,8 @@ func (rf *Raft) handleAppendEntriesRequest(args *AppendEntriesArgs, reply *Appen
 	}
 	rf.persist()
 	rf.apply()
+	log.Infof("[handleAppendEntriesRequest] After: Server %v state: %v, currentTerm: %v, lastIncludedIndex: %v, len(logs): %v",
+		rf.me, rf.state, rf.currentTerm, rf.lastIncludedIndex, len(rf.logs)-1)
 }
 
 func (rf *Raft) handleAppendEntriesReply(reply *AppendEntriesReply) {

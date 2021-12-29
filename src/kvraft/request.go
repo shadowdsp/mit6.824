@@ -14,8 +14,8 @@ func (kv *KVServer) KVRequest(args *Args, reply *Reply) {
 	// Your code here.
 	// defer FuncLatency("KVServer.RPC.PutAppend", time.Now(), args, reply)
 
-	// log.Infof("[KVRequest %v] Start! Server %v, ClientID: %v, SerialID: %v, args: %+v, reply: %+v",
-	// 	args.Op, kv.me, args.ClientID, args.SerialID, args, reply)
+	log.Infof("[KVRequest %v] Start! Server %v, ClientID: %v, SerialID: %v, args: %+v",
+		args.Op, kv.me, args.ClientID, args.SerialID, args)
 
 	kv.requestCh <- Request{
 		Args:  args,
@@ -55,8 +55,8 @@ func (kv *KVServer) handleKVRequest(args *Args, reply *Reply) {
 		Key:      args.Key,
 		Value:    args.Value,
 	}
-	log.Infof("[handleKVRequest] KVServer %v start to commit op %+v", kv.me, op)
 	index, _, isLeader := kv.rf.Start(op)
+	log.Infof("[handleKVRequest] KVServer %v start to commit op %+v, index %v, isLeader %v", kv.me, op, index, isLeader)
 
 	if !isLeader {
 		reply.Err = ErrWrongLeader

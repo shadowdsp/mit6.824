@@ -30,7 +30,7 @@ func (rf *Raft) handleInstallSnapshotRequest(args *InstallSnapshotArgs, reply *I
 	rf.mu.Lock()
 	defer rf.mu.Unlock()
 
-	log.Infof("[handleInstallSnapshotRequest] Server %v: args: %+v", rf.me, args)
+	log.Infof("[handleInstallSnapshotRequest] Server %v: currentTerm: %v, args: %+v", rf.me, rf.currentTerm, args)
 	reply.Term = rf.currentTerm
 	reply.ServerID = rf.me
 	reply.ReplicatedIndex = rf.getLastLogIndex()
@@ -61,17 +61,20 @@ func (rf *Raft) handleInstallSnapshotRequest(args *InstallSnapshotArgs, reply *I
 	rf.lastApplied = args.LastIncludedIndex
 	reply.ReplicatedIndex = rf.getLastLogIndex()
 	reply.LastIncludedIndex = rf.lastApplied
+	rf.apply()
 }
 
 func (rf *Raft) handleInstallSnapshotReply(reply *InstallSnapshotReply) {
 	rf.mu.Lock()
 	defer rf.mu.Unlock()
 
-	log.Infof("[handleInstallSnapshotReply] Server %v: Leader %v currentTerm: %v, reply: %+v",
+	log.Infof("[handleInstallSnapshotReply][Start] Server %v: Leader %v currentTerm: %v, reply: %+v",
 		reply.ServerID, rf.me, rf.currentTerm, reply)
 	if rf.isTermOutdateAndUpdateState(reply.Term) {
 		return
 	}
 	rf.nextIndex[reply.ServerID] = reply.ReplicatedIndex
 	rf.matchIndex[reply.ServerID] = reply.LastIncludedIndex
+	log.Infof("[handleInstallSnapshotReply][Finished] Server %v: Leader %v currentTerm: %v, reply: %+v",
+		reply.ServerID, rf.me, rf.currentTerm, reply)
 }

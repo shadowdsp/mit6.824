@@ -14,8 +14,8 @@ func (kv *KVServer) KVRequest(args *Args, reply *Reply) {
 	// Your code here.
 	// defer FuncLatency("KVServer.RPC.PutAppend", time.Now(), args, reply)
 
-	log.Infof("[KVRequest %v] Start! Server %v, ClientID: %v, SerialID: %v, args: %+v, reply: %+v",
-		args.Op, kv.me, args.ClientID, args.SerialID, args, reply)
+	// log.Infof("[KVRequest %v] Start! Server %v, ClientID: %v, SerialID: %v, args: %+v, reply: %+v",
+	// 	args.Op, kv.me, args.ClientID, args.SerialID, args, reply)
 
 	kv.requestCh <- Request{
 		Args:  args,
@@ -34,7 +34,7 @@ func (kv *KVServer) handleKVRequest(args *Args, reply *Reply) {
 	reply.Err = OK
 
 	kv.mu.Lock()
-	log.Infof("[handleKVRequest] Server %v handling request, args %+v", kv.me, args)
+	log.Infof("[handleKVRequest] KVServer %v handling request, args %+v", kv.me, args)
 	if serialID, ok := kv.clientMaxSerialID[args.ClientID]; ok && serialID >= args.SerialID {
 		if args.Op == OpNameGet {
 			if v, exist := kv.store[args.Key]; exist {
@@ -55,7 +55,7 @@ func (kv *KVServer) handleKVRequest(args *Args, reply *Reply) {
 		Key:      args.Key,
 		Value:    args.Value,
 	}
-	log.Infof("[handleKVRequest] Server %v start to commit op %+v", kv.me, op)
+	log.Infof("[handleKVRequest] KVServer %v start to commit op %+v", kv.me, op)
 	index, _, isLeader := kv.rf.Start(op)
 
 	if !isLeader {
@@ -68,7 +68,7 @@ func (kv *KVServer) handleKVRequest(args *Args, reply *Reply) {
 	kv.appliedOpCh[index] = waitCh
 	kv.mu.Unlock()
 
-	log.Infof("[handleKVRequest] Server %v wait for applied op, index %+v, op %+v", kv.me, index, op)
+	log.Infof("[handleKVRequest] KVServer %v wait for applied op, index %+v, op %+v", kv.me, index, op)
 	select {
 	case appliedOp := <-waitCh:
 		if appliedOp.ClientID != args.ClientID || appliedOp.SerialID != args.SerialID {
@@ -78,7 +78,7 @@ func (kv *KVServer) handleKVRequest(args *Args, reply *Reply) {
 		kv.closeWaitCh(index)
 		break
 	case <-time.After(applyOpTimeoutLimit):
-		log.Infof("[handleKVRequest] Server %v apply OP index %v timeout", kv.me, index)
+		log.Infof("[handleKVRequest] KVServer %v apply OP index %v timeout", kv.me, index)
 		reply.Err = ErrWrongLeader
 		if kv.killed() {
 			kv.cleanUpIfKilled()
@@ -94,6 +94,6 @@ func (kv *KVServer) handleKVRequest(args *Args, reply *Reply) {
 	} else {
 		reply.Err = ErrNoKey
 	}
-	log.Infof("[handleKVRequest] Server %v apply op successfully, index %+v, reply %+v", kv.me, index, reply)
+	log.Infof("[handleKVRequest] KVServer %v apply op successfully, index %+v, reply %+v", kv.me, index, reply)
 	kv.mu.Unlock()
 }

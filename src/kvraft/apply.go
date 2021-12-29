@@ -44,12 +44,13 @@ func (kv *KVServer) applyOp(index int, op Op) {
 	}
 
 	if waitCh, ok := kv.appliedOpCh[index]; ok {
-		log.Infof("[applyOp] Server %v is sending op to appliedOpCh, index %+v",
-			kv.me, index)
+		log.Infof("[applyOp] KVServer %v is sending op to appliedOpCh, index %+v, lastAppliedIndex: %v",
+			kv.me, index, kv.lastAppliedIndex)
 		waitCh <- op
 	} else {
-		log.Infof("[applyOp] Server %v failed to find index %v in appliedOpCh, op %+v",
-			kv.me, index, op)
+		// because of log replication
+		log.Infof("[applyOp] KVServer %v failed to find index %v in appliedOpCh, lastAppliedIndex: %v, op %+v",
+			kv.me, index, kv.lastAppliedIndex, op)
 	}
 }
 

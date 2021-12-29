@@ -221,9 +221,9 @@ func (rf *Raft) readPersist(data []byte) {
 	}
 	rf.currentTerm = currentTerm
 	rf.votedFor = votedFor
-	tmpLog := rf.getEmptyLogs()
-	tmpLog = append(tmpLog, logs...)
-	rf.logs = tmpLog
+	tmpLogs := rf.getEmptyLogs()
+	tmpLogs = append(tmpLogs, logs...)
+	rf.logs = tmpLogs
 	rf.lastIncludedIndex = lastIncludedIndex
 	rf.lastIncludedTerm = lastIncludedTerm
 	log.Infof("[readPersist] Server[%v] read persist, term: %v, commitIndex: %v, log: %+v, lastIncludedIndex: %v, lastIncludedTerm: %v",
@@ -235,14 +235,15 @@ func (rf *Raft) GetStateSize() int {
 }
 
 func (rf *Raft) truncateLog(lastAppliedIndex int) {
-	rf.lastIncludedIndex = lastAppliedIndex
+	lastLogIndexTmp := rf.getLogIndex(lastAppliedIndex)
 	rf.lastIncludedTerm = rf.getLogByIndex(lastAppliedIndex).Term
+	rf.lastIncludedIndex = lastAppliedIndex
 	rf.lastApplied = lastAppliedIndex
-	tmpLog := rf.getEmptyLogs()
-	tmpLog = append(tmpLog, rf.logs[lastAppliedIndex+1:]...)
-	rf.logs = tmpLog
-	log.Infof("[truncateLog] Server %v: lastIncludedIndex: %v, lastIncludedTerm: %v, logs: %+v",
-		rf.me, rf.lastIncludedIndex, rf.lastIncludedTerm, rf.logs)
+	tmpLogs := rf.getEmptyLogs()
+	tmpLogs = append(tmpLogs, rf.logs[lastLogIndexTmp+1:]...)
+	rf.logs = tmpLogs
+	log.Infof("[truncateLog] Server %v: lastIncludedIndex: %v, lastIncludedTerm: %v, logs: %+v, lastLogIndexTmp: %v",
+		rf.me, rf.lastIncludedIndex, rf.lastIncludedTerm, rf.logs, lastLogIndexTmp)
 }
 
 func (rf *Raft) installServerSnapshot(data []byte) {
@@ -260,8 +261,8 @@ func (rf *Raft) DoSnapshot(snapshotData []byte, lastAppliedIndex int) {
 	rf.mu.Lock()
 	defer rf.mu.Unlock()
 
-	log.Infof("[DoSnapshot] Server %v: lastAppliedIndex %v, rf.lastIncludedIndex %v",
-		rf.me, lastAppliedIndex, rf.lastIncludedIndex)
+	log.Infof("[DoSnapshot] Server %v: lastAppliedIndex %v, rf.lastIncludedIndex %v, len(log) %v",
+		rf.me, lastAppliedIndex, rf.lastIncludedIndex, len(rf.logs)-1)
 
 	// validation
 	if lastAppliedIndex <= rf.lastIncludedIndex {
@@ -273,6 +274,7 @@ func (rf *Raft) DoSnapshot(snapshotData []byte, lastAppliedIndex int) {
 	// persist state and snapshot
 	rf.persist()
 	rf.persister.SaveSnapshot(snapshotData)
+	rf.apply()
 }
 
 func (rf *Raft) isTermOutdateAndUpdateState(term int) bool {
@@ -532,11 +534,12 @@ func (rf *Raft) updateState(state State) {
 		return
 	}
 
-	log.Infof("[updateState] server %v term: %v, old state: %v, new state: %v", rf.me, rf.currentTerm, rf.state, state)
+	log.Infof("[updateState] server %v term: %v, lastIncludedIndex: %v, lastIncludedTerm: %v, old state: %v, new state: %v",
+		rf.me, rf.currentTerm, rf.lastIncludedIndex, rf.lastIncludedTerm, rf.state, state)
 	if state == Leader {
 		for i := 0; i < len(rf.peers); i++ {
 			rf.nextIndex[i] = rf.getLastLogIndex() + 1
-			rf.matchIndex[i] = 0
+			rf.matchIndex[i] = rf.lastIncludedIndex
 		}
 		rf.resetHeatbeatTimer()
 		rf.stopTimer(rf.electionTimer)
@@ -718,7 +721,7 @@ func init() {
 	// Only log the warning severity or above.
 	log.SetLevel(log.DebugLevel)
 	log.SetLevel(log.InfoLevel)
-	// log.SetLevel(log.WarnLevel)
+	log.SetLevel(log.WarnLevel)
 	log.SetFormatter(&log.TextFormatter{
 		// DisableColors: true,
 		FullTimestamp: true,

@@ -27,12 +27,12 @@ func (rf *Raft) getLastLogIndex() int {
 	return rf.lastIncludedIndex + len(rf.logs) - 1
 }
 
-func (rf *Raft) getLastLog() *LogEntry { return rf.logs[rf.getLastLogIndex()] }
+func (rf *Raft) getLastLog() *LogEntry { return rf.logs[len(rf.logs)-1] }
 
 func (rf *Raft) setLogByIndex(index int, e *LogEntry) {
 	rf.logs[rf.getLogIndex(index)] = e
 }
 
 func (rf *Raft) getEmptyLogs() LogEntries {
-	return LogEntries{&LogEntry{Command: nil, Term: -1}}
+	return LogEntries{&LogEntry{Command: nil, Term: rf.lastIncludedTerm}}
 }

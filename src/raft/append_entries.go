@@ -45,8 +45,9 @@ func (rf *Raft) handleAppendEntriesRequest(args *AppendEntriesArgs, reply *Appen
 	// 2. Refresh heartbeat time.
 	rf.mu.Lock()
 	defer rf.mu.Unlock()
-	log.Debugf("[handleAppendEntriesRequest] Before: Server %v state: %v, currentTerm: %v, prevLog: %+v, args: %+v",
-		rf.me, rf.state, rf.currentTerm, rf.getLogByIndex(args.PrevLogIndex), args)
+	log.Infof("[handleAppendEntriesRequest] Before: Server %v state: %v, currentTerm: %v, lastIncludedIndex: %v,"+
+		" len(logs): %v, prevLog: %+v, args: %+v",
+		rf.me, rf.state, rf.currentTerm, rf.lastIncludedIndex, len(rf.logs), rf.getLogByIndex(args.PrevLogIndex), args)
 
 	reply.Term = rf.currentTerm
 	reply.Success = true
@@ -68,7 +69,7 @@ func (rf *Raft) handleAppendEntriesRequest(args *AppendEntriesArgs, reply *Appen
 	// Rule 2: Reply false if log doesn’t contain an entry at prevLogIndex whose term matches prevLogTerm
 	if prevLog := rf.getLogByIndex(args.PrevLogIndex); prevLog == nil || prevLog.Term != args.PrevLogTerm {
 		matchLogIndex := args.PrevLogIndex
-		for ; matchLogIndex > 0; matchLogIndex-- {
+		for ; matchLogIndex > rf.lastIncludedIndex; matchLogIndex-- {
 			if prevLog := rf.getLogByIndex(matchLogIndex); prevLog != nil && prevLog.Term == args.PrevLogTerm {
 				break
 			}

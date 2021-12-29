@@ -176,7 +176,7 @@ func (rf *Raft) persist() {
 	if err := e.Encode(rf.votedFor); err != nil {
 		log.Warnf("[persist] Failed to encode votedFor: %v", err)
 	}
-	if err := e.Encode(rf.logs); err != nil {
+	if err := e.Encode(rf.logs[1:]); err != nil {
 		log.Warnf("[persist] Failed to encode logs: %v", err)
 	}
 	if err := e.Encode(rf.lastIncludedIndex); err != nil {
@@ -221,7 +221,9 @@ func (rf *Raft) readPersist(data []byte) {
 	}
 	rf.currentTerm = currentTerm
 	rf.votedFor = votedFor
-	rf.logs = logs
+	tmpLog := rf.getEmptyLogs()
+	tmpLog = append(tmpLog, logs...)
+	rf.logs = tmpLog
 	rf.lastIncludedIndex = lastIncludedIndex
 	rf.lastIncludedTerm = lastIncludedTerm
 	log.Infof("[readPersist] Server[%v] read persist, term: %v, commitIndex: %v, log: %+v, lastIncludedIndex: %v, lastIncludedTerm: %v",
@@ -239,9 +241,13 @@ func (rf *Raft) truncateLog(lastAppliedIndex int) {
 	tmpLog := rf.getEmptyLogs()
 	tmpLog = append(tmpLog, rf.logs[lastAppliedIndex+1:]...)
 	rf.logs = tmpLog
+	log.Infof("[truncateLog] Server %v: lastIncludedIndex: %v, lastIncludedTerm: %v, logs: %+v",
+		rf.me, rf.lastIncludedIndex, rf.lastIncludedTerm, rf.logs)
 }
 
 func (rf *Raft) installServerSnapshot(data []byte) {
+	log.Infof("[installServerSnapshot] Server %v: LastIncludedIndex: %v, LastIncludedTerm: %v",
+		rf.me, rf.lastIncludedIndex, rf.lastIncludedTerm)
 	rf.applyCh <- ApplyMsg{
 		CommandValid:      false,
 		Data:              data,
@@ -253,6 +259,9 @@ func (rf *Raft) installServerSnapshot(data []byte) {
 func (rf *Raft) DoSnapshot(snapshotData []byte, lastAppliedIndex int) {
 	rf.mu.Lock()
 	defer rf.mu.Unlock()
+
+	log.Infof("[DoSnapshot] Server %v: lastAppliedIndex %v, rf.lastIncludedIndex %v",
+		rf.me, lastAppliedIndex, rf.lastIncludedIndex)
 
 	// validation
 	if lastAppliedIndex <= rf.lastIncludedIndex {
@@ -690,8 +699,9 @@ func Make(peers []*labrpc.ClientEnd, me int,
 
 	// initialize from state persisted before a crash
 	rf.readPersist(persister.ReadRaftState())
-	rf.installSnapshot(persister.ReadSnapshot())
+	rf.installServerSnapshot(persister.ReadSnapshot())
 
+	log.Infof("[Make] rf.logs %+v", rf.logs)
 	rf.updateState(Follower)
 	go rf.run()
 	go rf.handleEvent()
@@ -708,7 +718,7 @@ func init() {
 	// Only log the warning severity or above.
 	log.SetLevel(log.DebugLevel)
 	log.SetLevel(log.InfoLevel)
-	log.SetLevel(log.WarnLevel)
+	// log.SetLevel(log.WarnLevel)
 	log.SetFormatter(&log.TextFormatter{
 		// DisableColors: true,
 		FullTimestamp: true,

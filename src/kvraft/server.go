@@ -140,6 +140,7 @@ func StartKVServer(servers []*labrpc.ClientEnd, me int, persister *raft.Persiste
 	// You may need initialization code here.
 	go kv.handleEvent()
 	go kv.handleApplyCh()
+	go kv.handleSnapshot()
 
 	return kv
 }
@@ -153,7 +154,7 @@ func init() {
 	// Only log the warning severity or above.
 	log.SetLevel(log.DebugLevel)
 	log.SetLevel(log.InfoLevel)
-	log.SetLevel(log.WarnLevel)
+	// log.SetLevel(log.WarnLevel)
 	log.SetFormatter(&log.TextFormatter{
 		// DisableColors: true,
 		FullTimestamp: true,

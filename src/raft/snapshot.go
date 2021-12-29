@@ -1,5 +1,7 @@
 package raft
 
+import log "github.com/sirupsen/logrus"
+
 type InstallSnapshotArgs struct {
 	Term              int
 	LeaderID          int
@@ -27,6 +29,8 @@ func (rf *Raft) InstallSnapshot(args *InstallSnapshotArgs, reply *InstallSnapsho
 func (rf *Raft) handleInstallSnapshotRequest(args *InstallSnapshotArgs, reply *InstallSnapshotReply) {
 	rf.mu.Lock()
 	defer rf.mu.Unlock()
+
+	log.Infof("[handleInstallSnapshotRequest] Server %v: args: %+v", rf.me, args)
 	reply.Term = rf.currentTerm
 	reply.ServerID = rf.me
 	reply.ReplicatedIndex = rf.getLastLogIndex()
@@ -40,6 +44,8 @@ func (rf *Raft) handleInstallSnapshotRequest(args *InstallSnapshotArgs, reply *I
 	rf.isTermOutdateAndUpdateState(args.Term)
 
 	if args.LastIncludedIndex >= rf.getLastLogIndex() {
+		rf.logs = rf.getEmptyLogs()
+	} else if args.LastIncludedTerm != rf.getLogByIndex(args.LastIncludedIndex).Term {
 		rf.logs = rf.getEmptyLogs()
 	} else {
 		tmpLogs := rf.getEmptyLogs()
@@ -61,6 +67,8 @@ func (rf *Raft) handleInstallSnapshotReply(reply *InstallSnapshotReply) {
 	rf.mu.Lock()
 	defer rf.mu.Unlock()
 
+	log.Infof("[handleInstallSnapshotReply] Server %v: Leader %v currentTerm: %v, reply: %+v",
+		reply.ServerID, rf.me, rf.currentTerm, reply)
 	if rf.isTermOutdateAndUpdateState(reply.Term) {
 		return
 	}

@@ -71,6 +71,7 @@ func (kv *KVServer) handleKVRequest(args *Args, reply *Reply) {
 	log.Infof("[handleKVRequest] KVServer %v wait for applied op, index %+v, op %+v", kv.me, index, op)
 	select {
 	case appliedOp := <-waitCh:
+		log.Infof("[handleKVRequest] KVServer %v resolved index %v op %+v", kv.me, index, op)
 		if appliedOp.ClientID != args.ClientID || appliedOp.SerialID != args.SerialID {
 			reply.Err = ErrWrongLeader
 			return
@@ -94,6 +95,6 @@ func (kv *KVServer) handleKVRequest(args *Args, reply *Reply) {
 	} else {
 		reply.Err = ErrNoKey
 	}
-	log.Infof("[handleKVRequest] KVServer %v apply op successfully, index %+v, reply %+v", kv.me, index, reply)
+	log.Infof("[handleKVRequest] KVServer %v applied op successfully, index %+v, reply %+v", kv.me, index, reply)
 	kv.mu.Unlock()
 }

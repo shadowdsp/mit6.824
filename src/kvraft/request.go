@@ -14,7 +14,7 @@ func (kv *KVServer) KVRequest(args *Args, reply *Reply) {
 	// Your code here.
 	// defer FuncLatency("KVServer.RPC.PutAppend", time.Now(), args, reply)
 
-	log.Infof("[KVRequest %v] Start! Server %v, ClientID: %v, SerialID: %v, args: %+v",
+	log.Infof("[KVRequest %v][Start] Server %v, ClientID: %v, SerialID: %v, args: %+v",
 		args.Op, kv.me, args.ClientID, args.SerialID, args)
 
 	kv.requestCh <- Request{
@@ -24,7 +24,7 @@ func (kv *KVServer) KVRequest(args *Args, reply *Reply) {
 	<-kv.requestDoneCh
 
 	// if !isReplySuccess(reply.Err) {
-	log.Infof("[KVRequest %v] Finished! Server %v, ClientID: %v, SerialID: %v, args: %+v, reply: %+v",
+	log.Infof("[KVRequest %v][Finish] Server %v, ClientID: %v, SerialID: %v, args: %+v, reply: %+v",
 		args.Op, kv.me, args.ClientID, args.SerialID, args, reply)
 	// }
 }

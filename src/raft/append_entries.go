@@ -36,7 +36,7 @@ func (rf *Raft) AppendEntries(args *AppendEntriesArgs, reply *AppendEntriesReply
 		Args:  args,
 		Reply: reply,
 	}
-	<-rf.RequestDone[RequestNameIDMapping[rpcMethodAppendEntries]]
+	<-rf.RequestDone
 }
 
 func (rf *Raft) handleAppendEntriesRequest(args *AppendEntriesArgs, reply *AppendEntriesReply) {
@@ -45,9 +45,9 @@ func (rf *Raft) handleAppendEntriesRequest(args *AppendEntriesArgs, reply *Appen
 	// 2. Refresh heartbeat time.
 	rf.mu.Lock()
 	defer rf.mu.Unlock()
-	log.Infof("[handleAppendEntriesRequest] Before: Server %v state: %v, currentTerm: %v, lastIncludedIndex: %v,"+
+	log.Infof("[handleAppendEntriesRequest][Start] Server %v state: %v, currentTerm: %v, lastIncludedIndex: %v,"+
 		" len(logs): %v, prevLog: %+v, args: %+v",
-		rf.me, rf.state, rf.currentTerm, rf.lastIncludedIndex, len(rf.logs), rf.getLogByIndex(args.PrevLogIndex), args)
+		rf.me, rf.state, rf.currentTerm, rf.lastIncludedIndex, len(rf.logs)-1, rf.getLogByIndex(args.PrevLogIndex), args)
 
 	reply.Term = rf.currentTerm
 	reply.Success = true
@@ -104,7 +104,7 @@ func (rf *Raft) handleAppendEntriesRequest(args *AppendEntriesArgs, reply *Appen
 	}
 	rf.persist()
 	rf.apply()
-	log.Infof("[handleAppendEntriesRequest] After: Server %v state: %v, currentTerm: %v, lastIncludedIndex: %v, len(logs): %v",
+	log.Infof("[handleAppendEntriesRequest][Finish] Server %v state: %v, currentTerm: %v, lastIncludedIndex: %v, len(logs): %v",
 		rf.me, rf.state, rf.currentTerm, rf.lastIncludedIndex, len(rf.logs)-1)
 }
 

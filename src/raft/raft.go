@@ -136,7 +136,7 @@ type Raft struct {
 	// Request and Reply channel
 	RequestCh   chan Request
 	ReplyCh     chan Reply
-	RequestDone []chan struct{}
+	RequestDone chan struct{}
 
 	applyCh chan ApplyMsg
 }
@@ -221,11 +221,11 @@ func (rf *Raft) readPersist(data []byte) {
 	}
 	rf.currentTerm = currentTerm
 	rf.votedFor = votedFor
-	tmpLogs := rf.getEmptyLogs()
-	tmpLogs = append(tmpLogs, logs...)
-	rf.logs = tmpLogs
 	rf.lastIncludedIndex = lastIncludedIndex
 	rf.lastIncludedTerm = lastIncludedTerm
+	tmpLogs := LogEntries{&LogEntry{Command: nil, Term: lastIncludedTerm}}
+	tmpLogs = append(tmpLogs, logs...)
+	rf.logs = tmpLogs
 	log.Infof("[readPersist] Server[%v] read persist, term: %v, commitIndex: %v, log: %+v, lastIncludedIndex: %v, lastIncludedTerm: %v",
 		rf.me, rf.currentTerm, rf.commitIndex, rf.logs, rf.lastIncludedIndex, rf.lastIncludedTerm)
 }
@@ -239,7 +239,7 @@ func (rf *Raft) truncateLog(lastAppliedIndex int) {
 	rf.lastIncludedTerm = rf.getLogByIndex(lastAppliedIndex).Term
 	rf.lastIncludedIndex = lastAppliedIndex
 	rf.lastApplied = lastAppliedIndex
-	tmpLogs := rf.getEmptyLogs()
+	tmpLogs := LogEntries{&LogEntry{Command: nil, Term: rf.lastIncludedTerm}}
 	tmpLogs = append(tmpLogs, rf.logs[lastLogIndexTmp+1:]...)
 	rf.logs = tmpLogs
 	log.Infof("[truncateLog] Server %v: lastIncludedIndex: %v, lastIncludedTerm: %v, logs: %+v, lastLogIndexTmp: %v",
@@ -495,8 +495,8 @@ func (rf *Raft) sendHeartbeat() {
 			}
 			log.Debugf("[heartbeat] Leader %v sendHeartbeat to server %v, prevLogIndex %v, prevLogTerm %v, len(logs) %v",
 				rf.me, serverID, prevLogIndex, prevLogTerm, len(logsToAppend))
-			rf.mu.Unlock()
 			reply := &AppendEntriesReply{}
+			rf.mu.Unlock()
 			go func(serverID int) {
 				if err := rf.sendAppendEntriesWithTimeout(serverID, args, reply); err != nil {
 					return
@@ -511,8 +511,8 @@ func (rf *Raft) sendHeartbeat() {
 				LastIncludedTerm:  rf.lastIncludedTerm,
 				Data:              rf.persister.ReadSnapshot(),
 			}
-			rf.mu.Unlock()
 			reply := &InstallSnapshotReply{}
+			rf.mu.Unlock()
 			go func(serverID int) {
 				if err := rf.sendInstallSnapshotWithTimeout(serverID, args, reply); err != nil {
 					return
@@ -570,7 +570,7 @@ func (rf *Raft) handleEvent() {
 			case *InstallSnapshotArgs:
 				rf.handleInstallSnapshotRequest(req.Args.(*InstallSnapshotArgs), req.Reply.(*InstallSnapshotReply))
 			}
-			rf.RequestDone[req.GetID()] <- struct{}{}
+			rf.RequestDone <- struct{}{}
 		case reply := <-rf.ReplyCh:
 			switch reply.(type) {
 			case *RequestVoteReply:
@@ -652,7 +652,7 @@ func (rf *Raft) apply() {
 			Command:      entry.Command,
 			CommandIndex: index,
 		}
-		log.Infof("[applyCh] Server %v start to apply log %+v, message %+v", rf.me, entry, applyMsg)
+		log.Infof("[applyCh] Server %v start to apply index %v log %+v, message %+v", rf.me, index, entry, applyMsg)
 		rf.applyCh <- applyMsg
 		rf.lastApplied++
 	}
@@ -680,6 +680,7 @@ func Make(peers []*labrpc.ClientEnd, me int,
 		currentTerm:       0,
 		lastIncludedIndex: 0,
 		lastIncludedTerm:  -1,
+		logs:              LogEntries{&LogEntry{Command: nil, Term: -1}},
 
 		// volatile state on servers
 		commitIndex: 0,
@@ -692,11 +693,7 @@ func Make(peers []*labrpc.ClientEnd, me int,
 
 		RequestCh:   make(chan Request),
 		ReplyCh:     make(chan Reply),
-		RequestDone: make([]chan struct{}, len(RequestNameIDMapping)),
-	}
-	rf.logs = rf.getEmptyLogs()
-	for i := range rf.RequestDone {
-		rf.RequestDone[i] = make(chan struct{})
+		RequestDone: make(chan struct{}),
 	}
 	// Your initialization code here (2A, 2B, 2C).
 

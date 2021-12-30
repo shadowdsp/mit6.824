@@ -41,6 +41,8 @@ func (kv *KVServer) applyOp(index int, op Op) {
 		}
 		kv.clientMaxSerialID[op.ClientID] = op.SerialID
 		kv.lastAppliedIndex = index
+		log.Infof("[applyOp] KVServer %v update store successfully, index %v, SerialID %v",
+			kv.me, index, op.SerialID)
 	}
 
 	if waitCh, ok := kv.appliedOpCh[index]; ok {

@@ -39,14 +39,14 @@ func (rf *Raft) RequestVote(args *RequestVoteArgs, reply *RequestVoteReply) {
 		Args:  args,
 		Reply: reply,
 	}
-	<-rf.RequestDone[RequestNameIDMapping[rpcMethodRequestVote]]
+	<-rf.RequestDone
 }
 
 func (rf *Raft) handleRequestVoteRequest(args *RequestVoteArgs, reply *RequestVoteReply) {
 	rf.mu.Lock()
 	defer rf.mu.Unlock()
 
-	log.Infof("[handleRequestVoteRequest] Start: Server %v state: %v, commitIndex: %v, lastLogIndex: %v, currentTerm: %v, voteFor: %v,  args: %+v, timestamp: %v",
+	log.Infof("[handleRequestVoteRequest][Start] Server %v state: %v, commitIndex: %v, lastLogIndex: %v, currentTerm: %v, voteFor: %v,  args: %+v, timestamp: %v",
 		rf.me, rf.state, rf.commitIndex, rf.getLastLogIndex(), rf.currentTerm, rf.votedFor, args, time.Now().UnixNano())
 
 	reply.ServerID = rf.me
@@ -69,7 +69,7 @@ func (rf *Raft) handleRequestVoteRequest(args *RequestVoteArgs, reply *RequestVo
 			rf.resetElectionTimer()
 		}
 	}
-	log.Debugf("[handleRequestVoteRequest] Finish: Server %v state: %v, currentTerm: %v, voteFor: %v,  args: %+v,", rf.me, rf.state, rf.currentTerm, rf.votedFor, args)
+	log.Debugf("[handleRequestVoteRequest][Finish] Server %v state: %v, currentTerm: %v, voteFor: %v,  args: %+v,", rf.me, rf.state, rf.currentTerm, rf.votedFor, args)
 }
 
 func (rf *Raft) handleRequestVoteReply(reply *RequestVoteReply) {

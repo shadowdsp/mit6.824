@@ -17,7 +17,7 @@ type LogEntries []*LogEntry
 func (rf *Raft) getLogIndex(index int) int { return index - rf.lastIncludedIndex }
 
 func (rf *Raft) getLogByIndex(index int) *LogEntry {
-	if index > rf.getLastLogIndex() {
+	if index > rf.getLastLogIndex() || index < rf.lastIncludedIndex {
 		return nil
 	}
 	return rf.logs[rf.getLogIndex(index)]

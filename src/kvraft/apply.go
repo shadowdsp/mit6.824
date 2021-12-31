@@ -45,7 +45,7 @@ func (kv *KVServer) applyOp(index int, op Op) {
 			kv.me, index, op.SerialID)
 	}
 
-	if waitCh, ok := kv.appliedOpCh[index]; ok {
+	if waitCh, ok := kv.appliedOpCh[index]; ok && waitCh != nil {
 		log.Infof("[applyOp] KVServer %v is sending op to appliedOpCh, index %+v, lastAppliedIndex: %v",
 			kv.me, index, kv.lastAppliedIndex)
 		waitCh <- op

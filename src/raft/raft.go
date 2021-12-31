@@ -223,6 +223,7 @@ func (rf *Raft) readPersist(data []byte) {
 	rf.votedFor = votedFor
 	rf.lastIncludedIndex = lastIncludedIndex
 	rf.lastIncludedTerm = lastIncludedTerm
+	rf.lastApplied = lastIncludedIndex
 	tmpLogs := LogEntries{&LogEntry{Command: nil, Term: lastIncludedTerm}}
 	tmpLogs = append(tmpLogs, logs...)
 	rf.logs = tmpLogs
@@ -645,6 +646,7 @@ func (rf *Raft) run() {
 
 func (rf *Raft) apply() {
 	for rf.lastApplied < rf.commitIndex {
+		log.Infof("[applyCh][Before] Server %v start to apply index %v, len(log) %+v, commitIndex %+v", rf.me, rf.lastApplied+1, len(rf.logs)-1, rf.commitIndex)
 		index := rf.lastApplied + 1
 		entry := rf.getLogByIndex(index)
 		applyMsg := ApplyMsg{

@@ -46,8 +46,8 @@ func (rf *Raft) handleAppendEntriesRequest(args *AppendEntriesArgs, reply *Appen
 	rf.mu.Lock()
 	defer rf.mu.Unlock()
 	log.Infof("[handleAppendEntriesRequest][Start] Server %v state: %v, currentTerm: %v, lastIncludedIndex: %v,"+
-		" len(logs): %v, prevLog: %+v, args: %+v",
-		rf.me, rf.state, rf.currentTerm, rf.lastIncludedIndex, len(rf.logs)-1, rf.getLogByIndex(args.PrevLogIndex), args)
+		" len(logs): %v, args: %+v",
+		rf.me, rf.state, rf.currentTerm, rf.lastIncludedIndex, len(rf.logs)-1, args)
 
 	reply.Term = rf.currentTerm
 	reply.Success = true
@@ -89,7 +89,7 @@ func (rf *Raft) handleAppendEntriesRequest(args *AppendEntriesArgs, reply *Appen
 		// The log at prevLogIndex is the same as leader, we should check the logs after prevLogIndex
 		index := i + args.PrevLogIndex + 1
 		if entry := rf.getLogByIndex(index); entry != nil && entry.Term != args.Logs[i].Term {
-			rf.logs = rf.logs[:index]
+			rf.logs = rf.logs[:rf.getLogIndex(index)]
 		}
 		if index > rf.getLastLogIndex() {
 			rf.logs = append(rf.logs, args.Logs[i])
@@ -126,8 +126,6 @@ func (rf *Raft) handleAppendEntriesReply(reply *AppendEntriesReply) {
 
 	// Try to update leader commit index
 	matchIndex := rf.matchIndex[reply.ServerID]
-	log.Debugf("[handleAppendEntriesReply] Server %v: nextIndex %v, matchIndex %v, commitIndex %v",
-		reply.ServerID, rf.nextIndex[reply.ServerID], matchIndex, rf.commitIndex)
 	count := 0
 	for j := range rf.peers {
 		if rf.matchIndex[j] >= matchIndex {
@@ -138,6 +136,8 @@ func (rf *Raft) handleAppendEntriesReply(reply *AppendEntriesReply) {
 		log.Debugf("Leader %v in term %v updatedCommitIndex %v", rf.me, rf.currentTerm, matchIndex)
 		rf.commitIndex = matchIndex
 	}
+	log.Infof("[handleAppendEntriesReply] Server %v: nextIndex %v, matchIndex %v, commitIndex %v, lastApplied %v, len(rf.logs) %v, lastIncludedIndex %v",
+		reply.ServerID, rf.nextIndex[reply.ServerID], matchIndex, rf.commitIndex, rf.lastApplied, len(rf.logs)-1, rf.lastIncludedIndex)
 	rf.persist()
 	rf.apply()
 }

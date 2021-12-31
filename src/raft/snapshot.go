@@ -52,7 +52,7 @@ func (rf *Raft) handleInstallSnapshotRequest(args *InstallSnapshotArgs, reply *I
 		rf.logs = LogEntries{&LogEntry{Command: nil, Term: args.LastIncludedTerm}}
 	} else {
 		tmpLogs := LogEntries{&LogEntry{Command: nil, Term: args.LastIncludedTerm}}
-		tmpLogs = append(tmpLogs, rf.logs[args.LastIncludedIndex+1:]...)
+		tmpLogs = append(tmpLogs, rf.logs[rf.getLogIndex(args.LastIncludedIndex)+1:]...)
 		rf.logs = tmpLogs
 	}
 	rf.lastIncludedTerm = args.LastIncludedTerm

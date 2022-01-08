@@ -86,9 +86,7 @@ func (ck *Clerk) sendRequestToServer(op string, key string, value string, server
 	reply := Reply{}
 	ck.mu.Unlock()
 
-	// ok := ck.servers[serverID].Call(RpcNameKVRequest, &args, &reply)
 	err := RpcCallWithTimeout(ck.servers[serverID], RpcNameKVRequest, &args, &reply, rpcTimeoutLimit)
-
 	if err != nil || reply.Err == ErrWrongLeader {
 		success = false
 	} else if reply.Err == OK {
@@ -108,7 +106,6 @@ func (ck *Clerk) sendRequest(op string, key string, value string) string {
 		if result, success := ck.sendRequestToServer(op, key, value, ck.leaderID); success {
 			return result
 		}
-
 		ck.mu.Lock()
 		ck.leaderID = (ck.leaderID + 1) % len(ck.servers)
 		ck.mu.Unlock()

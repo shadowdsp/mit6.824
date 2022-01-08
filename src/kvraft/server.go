@@ -159,5 +159,5 @@ func init() {
 		// DisableColors: true,
 		FullTimestamp: true,
 	})
-	go startPprofServer()
+	// go startPprofServer()
 }

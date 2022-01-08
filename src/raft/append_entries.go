@@ -93,8 +93,6 @@ func (rf *Raft) handleAppendEntriesRequest(args *AppendEntriesArgs, reply *Appen
 		}
 		if index > rf.getLastLogIndex() {
 			rf.logs = append(rf.logs, args.Logs[i])
-		} else {
-			rf.setLogByIndex(index, args.Logs[i])
 		}
 	}
 
